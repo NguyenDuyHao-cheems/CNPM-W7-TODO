@@ -3,9 +3,9 @@ CFLAGS = -Wall -Wextra -O2 -pthread
 LDFLAGS = -pthread -lsqlite3
 
 TARGET = server
-SRCS = server.c task_service.c sqlite_repository.c cJSON.c
+SRCS = server.c task_service.c sqlite_repository.c event_broadcast.c cJSON.c
 OBJS = $(SRCS:.c=.o)
-HEADERS = task_service.h task_repository.h cJSON.h
+HEADERS = task_service.h task_repository.h event_broadcast.h cJSON.h
 
 all: $(TARGET)
 

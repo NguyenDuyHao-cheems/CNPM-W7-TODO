@@ -15,6 +15,7 @@
 #include <arpa/inet.h>
 #include "cJSON.h"
 #include "task_service.h"
+#include "event_broadcast.h"
 
 #define DEFAULT_PORT 8080
 #define BUFFER_SIZE 65536
@@ -59,6 +60,49 @@ static char *read_file_to_string(const char *path, long *out_len) {
 
     if (out_len) *out_len = (long)read_bytes;
     return buffer;
+}
+
+/* Helper: URL-decode a query-string value (simple, in-place) */
+static void url_decode(char *dst, size_t dst_size, const char *src) {
+    size_t out = 0;
+    for (size_t i = 0; src[i] && out + 1 < dst_size; i++) {
+        if (src[i] == '%' && src[i+1] && src[i+2]) {
+            char hex[3] = { src[i+1], src[i+2], '\0' };
+            dst[out++] = (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else if (src[i] == '+') {
+            dst[out++] = ' ';
+        } else {
+            dst[out++] = src[i];
+        }
+    }
+    dst[out] = '\0';
+}
+
+/* Helper: Extract value of named query parameter from raw query string */
+static void get_query_param(const char *query, const char *param, char *out, size_t out_size) {
+    out[0] = '\0';
+    if (!query || !param) return;
+
+    size_t param_len = strlen(param);
+    const char *p = query;
+    while (*p) {
+        if (strncmp(p, param, param_len) == 0 && p[param_len] == '=') {
+            const char *val_start = p + param_len + 1;
+            const char *val_end   = strchr(val_start, '&');
+            size_t val_len = val_end ? (size_t)(val_end - val_start) : strlen(val_start);
+            char raw[512] = {0};
+            if (val_len >= sizeof(raw)) val_len = sizeof(raw) - 1;
+            memcpy(raw, val_start, val_len);
+            raw[val_len] = '\0';
+            url_decode(out, out_size, raw);
+            return;
+        }
+        /* Advance to next param */
+        const char *next = strchr(p, '&');
+        if (!next) break;
+        p = next + 1;
+    }
 }
 
 /* Send HTTP Response */
@@ -108,7 +152,105 @@ static void serve_static_file(int client_fd, const char *filepath, const char *c
     free(data);
 }
 
-/* Route handlers delegating to Service Layer */
+/* ===================================================================
+ * SSE Handler — long-lived connection: GET /api/events
+ * =================================================================== */
+
+typedef struct {
+    int  client_fd;
+    char client_name[256];
+} sse_thread_args_t;
+
+static void *handle_sse_thread(void *arg) {
+    sse_thread_args_t *a = (sse_thread_args_t *)arg;
+    int  fd          = a->client_fd;
+    char name[256];
+    strncpy(name, a->client_name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+    free(a);
+
+    /* Send SSE HTTP headers */
+    const char *headers =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        "Connection: keep-alive\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Access-Control-Allow-Headers: Content-Type, ngrok-skip-browser-warning\r\n"
+        "\r\n";
+    if (send(fd, headers, strlen(headers), 0) < 0) {
+        close(fd);
+        return NULL;
+    }
+
+    /* Register with broadcast system */
+    int client_id = broadcast_add_client(fd, name);
+    if (client_id < 0) {
+        /* Too many clients */
+        const char *err = "event: error\ndata: {\"error\":\"Too many clients\"}\n\n";
+        send(fd, err, strlen(err), 0);
+        close(fd);
+        return NULL;
+    }
+
+    printf("[SSE] Client '%s' connected (id=%d), total=%d\n",
+           name, client_id, broadcast_get_client_count());
+    fflush(stdout);
+
+    /* Announce arrival to all other clients */
+    {
+        cJSON *evt = cJSON_CreateObject();
+        cJSON_AddStringToObject(evt, "client_name", name);
+        cJSON_AddNumberToObject(evt, "online_count", broadcast_get_client_count());
+        cJSON *list = broadcast_get_client_list();
+        cJSON_AddItemToObject(evt, "clients", list);
+        char *js = cJSON_PrintUnformatted(evt);
+        cJSON_Delete(evt);
+        if (js) {
+            broadcast_event(EVENT_CLIENT_JOINED, js);
+            free(js);
+        }
+    }
+
+    /* Keep the connection open — send a heartbeat comment every 15s
+     * so proxies/browsers don't time it out, and detect disconnects. */
+    while (broadcast_client_alive(client_id)) {
+        sleep(15);
+        if (!broadcast_client_alive(client_id)) break;
+        /* SSE comment (no event dispatch on client) */
+        const char *hb = ": heartbeat\n\n";
+        if (send(fd, hb, strlen(hb), MSG_NOSIGNAL) < 0) break;
+    }
+
+    /* Cleanup */
+    broadcast_remove_client(client_id);
+
+    printf("[SSE] Client '%s' left (id=%d), total=%d\n",
+           name, client_id, broadcast_get_client_count());
+    fflush(stdout);
+
+    /* Announce departure */
+    {
+        cJSON *evt = cJSON_CreateObject();
+        cJSON_AddStringToObject(evt, "client_name", name);
+        cJSON_AddNumberToObject(evt, "online_count", broadcast_get_client_count());
+        cJSON *list = broadcast_get_client_list();
+        cJSON_AddItemToObject(evt, "clients", list);
+        char *js = cJSON_PrintUnformatted(evt);
+        cJSON_Delete(evt);
+        if (js) {
+            broadcast_event(EVENT_CLIENT_LEFT, js);
+            free(js);
+        }
+    }
+
+    return NULL;
+}
+
+/* ===================================================================
+ * REST Route Handlers (Presentation Layer — delegates to Service)
+ * =================================================================== */
+
 static void handle_get_tasks(int client_fd) {
     cJSON *tasks = task_service_get_all();
     if (!tasks) {
@@ -152,10 +294,14 @@ static void handle_post_task(int client_fd, const char *body) {
         return;
     }
 
-    char *task_str = cJSON_Print(new_task);
+    char *task_str = cJSON_PrintUnformatted(new_task);
     cJSON_Delete(new_task);
 
     send_json_response(client_fd, 201, "Created", task_str);
+
+    /* V3.5: Broadcast real-time event to all SSE clients */
+    broadcast_event(EVENT_TASK_CREATED, task_str);
+
     free(task_str);
 }
 
@@ -186,9 +332,9 @@ static void handle_update_task(int client_fd, int target_id, const char *body) {
     }
 
     char err_buf[256] = {0};
-    cJSON *updated_task = task_service_update(target_id, 
-                                             has_completed ? &completed_val : NULL, 
-                                             new_title, 
+    cJSON *updated_task = task_service_update(target_id,
+                                             has_completed ? &completed_val : NULL,
+                                             new_title,
                                              err_buf, sizeof(err_buf));
     cJSON_Delete(payload);
 
@@ -197,10 +343,14 @@ static void handle_update_task(int client_fd, int target_id, const char *body) {
         return;
     }
 
-    char *updated_str = cJSON_Print(updated_task);
+    char *updated_str = cJSON_PrintUnformatted(updated_task);
     cJSON_Delete(updated_task);
 
     send_json_response(client_fd, 200, "OK", updated_str);
+
+    /* V3.5: Broadcast real-time event to all SSE clients */
+    broadcast_event(EVENT_TASK_UPDATED, updated_str);
+
     free(updated_str);
 }
 
@@ -214,9 +364,15 @@ static void handle_delete_task(int client_fd, int target_id) {
     char resp[256];
     snprintf(resp, sizeof(resp), "{\"success\":true,\"deleted_id\":%d}", target_id);
     send_json_response(client_fd, 200, "OK", resp);
+
+    /* V3.5: Broadcast real-time event to all SSE clients */
+    broadcast_event(EVENT_TASK_DELETED, resp);
 }
 
-/* Client request dispatcher */
+/* ===================================================================
+ * Client Request Dispatcher
+ * =================================================================== */
+
 static void *handle_client(void *arg) {
     int client_fd = (intptr_t)arg;
     char buffer[BUFFER_SIZE];
@@ -228,8 +384,8 @@ static void *handle_client(void *arg) {
     }
     buffer[bytes_read] = '\0';
 
-    char method[16] = {0};
-    char path[512] = {0};
+    char method[16]  = {0};
+    char path[512]   = {0};
     char version[16] = {0};
 
     if (sscanf(buffer, "%15s %511s %15s", method, path, version) < 2) {
@@ -238,13 +394,16 @@ static void *handle_client(void *arg) {
         return NULL;
     }
 
-    char *query = strchr(path, '?');
-    if (query) *query = '\0';
+    /* Split path from query string */
+    char query_string[512] = {0};
+    char *q = strchr(path, '?');
+    if (q) {
+        strncpy(query_string, q + 1, sizeof(query_string) - 1);
+        *q = '\0';
+    }
 
     char *body = strstr(buffer, "\r\n\r\n");
-    if (body) {
-        body += 4;
-    }
+    if (body) body += 4;
 
     char *cl_header = strcasestr(buffer, "Content-Length:");
     if (cl_header) {
@@ -260,24 +419,82 @@ static void *handle_client(void *arg) {
         }
     }
 
+    /* OPTIONS preflight */
     if (strcmp(method, "OPTIONS") == 0) {
         send_response(client_fd, 204, "No Content", "text/plain", "", 0);
         close(client_fd);
         return NULL;
     }
 
-    /* API routes */
+    /* -------------------------------------------------------------------
+     * API routes
+     * ------------------------------------------------------------------- */
+
+    /* V3.5: SSE real-time event stream */
+    if (strcmp(path, "/api/events") == 0 && strcmp(method, "GET") == 0) {
+        char client_name[256] = {0};
+        get_query_param(query_string, "name", client_name, sizeof(client_name));
+        if (client_name[0] == '\0') {
+            snprintf(client_name, sizeof(client_name), "Client #%ld", (long)time(NULL) % 10000);
+        }
+
+        sse_thread_args_t *args = malloc(sizeof(sse_thread_args_t));
+        if (!args) {
+            send_error(client_fd, 500, "Internal Server Error", "Out of memory");
+            close(client_fd);
+            return NULL;
+        }
+        args->client_fd = client_fd;
+        strncpy(args->client_name, client_name, sizeof(args->client_name) - 1);
+        args->client_name[sizeof(args->client_name) - 1] = '\0';
+
+        pthread_t sse_thread;
+        if (pthread_create(&sse_thread, NULL, handle_sse_thread, args) == 0) {
+            pthread_detach(sse_thread);
+        } else {
+            free(args);
+            send_error(client_fd, 500, "Internal Server Error", "Cannot create SSE thread");
+            close(client_fd);
+        }
+        /* DO NOT close client_fd here — the SSE thread owns it */
+        return NULL;
+    }
+
+    /* V3.5: Online client list */
+    if (strcmp(path, "/api/clients") == 0 && strcmp(method, "GET") == 0) {
+        cJSON *wrapper = cJSON_CreateObject();
+        cJSON *list = broadcast_get_client_list();
+        cJSON_AddItemToObject(wrapper, "clients", list);
+        cJSON_AddNumberToObject(wrapper, "online_count", broadcast_get_client_count());
+        char *js = cJSON_Print(wrapper);
+        cJSON_Delete(wrapper);
+        send_json_response(client_fd, 200, "OK", js);
+        free(js);
+        close(client_fd);
+        return NULL;
+    }
+
+    /* Architecture info (updated to V3.5) */
     if (strcmp(path, "/api/info") == 0) {
-        int count = task_service_count();
-        char info_json[512];
+        int count   = task_service_count();
+        int online  = broadcast_get_client_count();
+        char info_json[768];
         snprintf(info_json, sizeof(info_json),
-            "{\"version\":\"V3\",\"architecture\":\"N-Layer (Presentation, Service, SQLite Repository)\",\"storage\":\"tasks.db (SQLite3)\",\"ui\":\"Kanban 2-Column Board\",\"task_count\":%d,\"timestamp\":%ld}",
-            count, (long)time(NULL));
+            "{\"version\":\"V3.5\","
+            "\"architecture\":\"N-Layer (Presentation, Service, SQLite Repository) + SSE Real-time\","
+            "\"storage\":\"tasks.db (SQLite3)\","
+            "\"ui\":\"Kanban 2-Column Board\","
+            "\"sync\":\"Server-Sent Events (real-time push)\","
+            "\"online_clients\":%d,"
+            "\"task_count\":%d,"
+            "\"timestamp\":%ld}",
+            online, count, (long)time(NULL));
         send_json_response(client_fd, 200, "OK", info_json);
         close(client_fd);
         return NULL;
     }
 
+    /* CRUD task routes */
     if (strncmp(path, "/api/tasks", 10) == 0) {
         char *id_part = path + 10;
         if (*id_part == '/') id_part++;
@@ -323,6 +540,10 @@ static void *handle_client(void *arg) {
     return NULL;
 }
 
+/* ===================================================================
+ * Main
+ * =================================================================== */
+
 int main(int argc, char *argv[]) {
     int port = DEFAULT_PORT;
     if (argc >= 2) {
@@ -330,11 +551,14 @@ int main(int argc, char *argv[]) {
         if (port <= 0 || port > 65535) port = DEFAULT_PORT;
     }
 
-    signal(SIGINT, handle_sigint);
+    signal(SIGINT,  handle_sigint);
     signal(SIGTERM, handle_sigint);
     signal(SIGPIPE, SIG_IGN);
 
-    // Initialize Service Layer & SQLite Repository (with migration from tasks.json)
+    /* Initialize Event Broadcast system (V3.5) */
+    broadcast_init();
+
+    /* Initialize Service Layer & SQLite Repository (with migration from tasks.json) */
     if (!task_service_init(TASKS_DB, TASKS_JSON_MIGRATION)) {
         fprintf(stderr, "Failed to initialize Task Service and SQLite Repository.\n");
         return 1;
@@ -354,9 +578,9 @@ int main(int argc, char *argv[]) {
 
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
+    server_addr.sin_family      = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(port);
+    server_addr.sin_port        = htons(port);
 
     if (bind(server_socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Socket bind failed");
@@ -373,11 +597,13 @@ int main(int argc, char *argv[]) {
     }
 
     printf("===================================================\n");
-    printf(" CNPM-W7 Task Manager (Version 3 - N-Layer & SQLite)\n");
+    printf(" CNPM-W7 Task Manager (Version 3.5 — N-Layer + SSE)\n");
     printf(" Server listening at: http://0.0.0.0:%d\n", port);
-    printf(" Architecture:        N-Layer (Presentation / Service / Repo)\n");
+    printf(" Architecture:        N-Layer + SSE Real-time Broadcast\n");
     printf(" Storage Engine:      SQLite3 (%s)\n", TASKS_DB);
-    printf(" UI Style:            2-Column Kanban (Pending / Completed)\n");
+    printf(" UI Style:            2-Column Kanban + Online Users Panel\n");
+    printf(" Real-time sync:      GET /api/events  (Server-Sent Events)\n");
+    printf(" Online client list:  GET /api/clients\n");
     printf(" Press Ctrl+C to terminate cleanly.\n");
     printf("===================================================\n");
     fflush(stdout);
@@ -401,10 +627,8 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\nShutting down server cleanly...\n");
-    if (server_socket_fd >= 0) {
-        close(server_socket_fd);
-    }
-
+    broadcast_close();
+    if (server_socket_fd >= 0) close(server_socket_fd);
     task_service_close();
     printf("Server stopped cleanly.\n");
     return 0;

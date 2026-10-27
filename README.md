@@ -10,7 +10,8 @@ Dự án cài đặt ứng dụng quản lý công việc (Task Management) ti�
 | :--- | :--- | :--- | :--- |
 | **V1** | Standalone Local Process | Chạy cục bộ 1 máy, file `tasks.json` | ✅ Hoàn thành (`tag: v1.0`) |
 | **V2** | Client–Server (Centralized State) | Nhiều client kết nối chung 1 C server qua LAN / Ngrok Tunnel | ✅ Hoàn thành (`tag: v2.0`) |
-| **V3** | **N-Layer & Kanban Board** | **Tách 3 tầng (Presentation / Service / Repository), Database SQLite3** | ✅ **Hoàn thành (`tag: v3.0`)** |
+| **V3** | N-Layer & Kanban Board | Tách 3 tầng (Presentation / Service / Repository), Database SQLite3 | ✅ Hoàn thành (`tag: v3.0`) |
+| **V3.5** | **N-Layer + SSE Real-time Collaboration** | **Thay HTTP Polling bằng Server-Sent Events; nhận biết người dùng online** | ✅ **Hoàn thành (`tag: v3.5`)** |
 | **V4** | Peer-to-Peer (P2P Direct Sync) | Đồng bộ ngang hàng khi mất server trung tâm | ⏳ Tiếp theo |
 
 ---
@@ -41,6 +42,9 @@ Dự án cài đặt ứng dụng quản lý công việc (Task Management) ti�
 
 # Kiểm chứng Version 3 (N-Layer, SQLite Migration & Kanban)
 ./test_v3.sh
+
+# Kiểm chứng Version 3.5 (SSE Real-time, Online Users)
+./test_v3_5.sh
 ```
 
 ---
@@ -130,51 +134,116 @@ Theo yêu cầu đề bài: *"Chỉ rõ những file thay đổi khi đổi UI v
 | **V1** | **Data Persistence** trên một máy cục bộ (Dữ liệu không mất khi restart). | Xây dựng Single-Process C Backend với POSIX Sockets phục vụ REST API + Static Files; đọc/ghi dữ liệu vào `tasks.json` an toàn bằng `cJSON` và atomic rename. | `server.c`, `cJSON.c`, `cJSON.h`, `Makefile`, `public/index.html`, `public/style.css`, `public/app.js`, `tasks.json`. | Đạt: Tạo 2 task, cập nhật 1 task, tắt và khởi động lại server dữ liệu được khôi phục 100%. |
 | **V2** | **Centralized Shared State** giữa nhiều client đồng thời qua mạng; tính tươi mới (Freshness). | Cấu hình C Server bind `0.0.0.0`, mở rộng CORS; chuyển tiếp port qua **Ngrok Tunnel** ra Internet; bổ sung cơ chế **Auto-Polling (2.5s)** trên Frontend để đồng bộ hai chiều giữa các client. | `server.c`, `public/index.html`, `public/style.css`, `public/app.js`, `start_ngrok.sh`, `test_v2.sh`. | Đạt: Client A tạo task, Client B thấy sau 2.5s; Client B hoàn thành task, Client A thấy ngay trạng thái mới. |
 | **V3** | **Modifiability** & **Separation of Concerns** (Tách Presentation, Business Logic, Data Access; hỗ trợ ACID database). | Áp dụng mô hình **N-Layer**: Tách `task_service` (nghiệp vụ) và `sqlite_repository` (Data Access SQLite3); chuyển đổi giao diện sang **Kanban 2 cột** (Drag & Drop); tự động migrate dữ liệu từ `tasks.json` sang `tasks.db`. | `task_repository.h`, `sqlite_repository.c`, `task_service.h`, `task_service.c`, `server.c`, `Makefile`, `public/index.html`, `public/style.css`, `public/app.js`, `test_v3.sh`. | Đạt: Toàn bộ task cũ từ V2 được chuyển sang SQLite không mất mát; kéo thả chuyển cột Kanban mượt mà; tắt mở lại server dữ liệu SQLite toàn vẹn. |
+| **V3.5** | **Real-time Collaboration & Multi-User Awareness** (Cộng tác thời gian thực tức thì <50ms; giảm tải băng thông mạng; nhận biết người dùng online; tiền đề event stream cho P2P V4). | Thay thế HTTP Polling bằng **Server-Sent Events (SSE)** tại `GET /api/events` và `GET /api/clients`; xây dựng module `event_broadcast.c/.h` đa luồng (`pthread_mutex_t`) quản lý kết nối client và broadcast các sự kiện granular (`task_created`, `task_updated`, `task_deleted`, `client_joined`, `client_left`); Frontend cập nhật DOM trực tiếp theo event (không cần load lại toàn bộ danh sách); hỗ trợ tự động fallback sang polling nếu mất kết nối SSE. | `event_broadcast.h`, `event_broadcast.c`, `server.c`, `Makefile`, `public/app.js`, `public/index.html`, `public/style.css`, `test_v3_5.sh`. | Đạt: 11/11 bài test tự động (`test_v3_5.sh`). Client A thêm/sửa/xóa task thì Client B nhận event SSE tức thì; nhận biết chính xác số người dùng online; kiểm tra hồi quy V1, V2, V3 đều vượt qua 100%. |
 
 ---
 
-## 📐 Sơ đồ kiến trúc Version 3 (N-Layer & SQLite)
+## 📐 Sơ đồ kiến trúc Version 3.5 (N-Layer + SSE Real-time Broadcast)
 
 ```mermaid
 graph TD
-    subgraph Presentation ["Presentation Layer"]
-        KanbanUI["Kanban Board 2-Column UI (Drag & Drop)"]
+    subgraph Presentation ["Presentation Layer (V3.5)"]
+        KanbanUI["Kanban Board UI + Online Users Panel (HTML5/CSS/JS)"]
         HTTPRouter["HTTP Router & Web Controller (server.c)"]
-        KanbanUI <==>|"HTTP REST API (/api/tasks)"| HTTPRouter
+        SSEEndpoint["SSE Stream Endpoint: GET /api/events"]
+        ClientsEndpoint["Online Users API: GET /api/clients"]
+        KanbanUI <==>|"REST API (POST / PUT / DELETE / GET)"| HTTPRouter
+        KanbanUI <-.->|"EventSource (SSE Stream)"| SSEEndpoint
+        KanbanUI -.->|"Fetch Clients"| ClientsEndpoint
     end
 
     subgraph BusinessLogic ["Business Logic Layer"]
         TaskService["Task Service (task_service.c)<br/>- Validation rules<br/>- Task lifecycle management"]
-        HTTPRouter ==>|"Gọi hàm Service (Không phụ thuộc DB)"| TaskService
+        EventBroadcast["Event Broadcaster (event_broadcast.h/.c)<br/>- Client FD Registry<br/>- Thread-safe Mutex<br/>- SSE Granular Event Dispatcher"]
+        HTTPRouter ==>|"1. Gọi hàm Service"| TaskService
+        HTTPRouter ==>|"2. Broadcast sự kiện sau CRUD"| EventBroadcast
+        EventBroadcast ==>|"Push Event frames (text/event-stream)"| SSEEndpoint
     end
 
     subgraph DataAccess ["Data Access Layer"]
         RepoInterface["Task Repository Interface (task_repository.h)"]
-        SQLiteRepo["SQLite Repository (sqlite_repository.c)<br/>- Prepared Statements<br/>- Auto-migration from tasks.json"]
-        TaskService ==>|"Gọi Interface Repository"| RepoInterface
+        SQLiteRepo["SQLite Repository (sqlite_repository.c)<br/>- Prepared Statements<br/>- Write-Ahead Logging (WAL)"]
+        TaskService ==>|"CRUD Interface"| RepoInterface
         RepoInterface -.->|"Triển khai"| SQLiteRepo
     end
 
     subgraph DatabaseEngine ["Storage Engine"]
         SQLiteDB[("tasks.db (SQLite3 Database)")]
-        LegacyJSON[("tasks.json (Nguồn cũ)")]
-        SQLiteRepo <==>|"SQL Queries (CRUD)"| SQLiteDB
-        LegacyJSON -.->|"Migration khi khởi động lần đầu"| SQLiteRepo
+        SQLiteRepo <==>|"SQL Queries"| SQLiteDB
     end
 ```
 
 ---
 
-## 💡 Trả lời câu hỏi thảo luận mục 03 & 05 (V3)
+## ⚡ Chi tiết kiến trúc Version 3.5: Cộng tác đa người dùng thời gian thực
+
+### 1. Vấn đề nảy sinh và Động lực kiến trúc của Version 3.5
+- **Hạn chế của Polling ở Version 2 & Version 3:**
+  - Ở V2 và V3, các client đồng bộ dữ liệu bằng cơ chế **HTTP Polling định kỳ mỗi 2.5 giây** (`setInterval`).
+  - Mỗi 2.5s, mọi client gửi `GET /api/tasks` kéo **toàn bộ mảng JSON** về máy, bất kể có dữ liệu mới hay không. Điều này gây lãng phí băng thông mạng, tăng tải CPU cho server khi số lượng client tăng.
+  - Độ trễ phản hồi (latency) trung bình lên đến 1.25s - 2.5s, không mang lại trải nghiệm cộng tác tức thời (real-time).
+  - Không có thông tin trạng thái người dùng (không biết ai đang cùng làm việc trên bảng công việc).
+- **Mục tiêu của Version 3.5:**
+  1. Chuyển sang mô hình **Push (Server-Sent Events)**: Server chủ động đẩy thông báo ngay khi có sự thay đổi. Độ trễ giảm xuống dưới 50ms.
+  2. **Giao thức sự kiện rời rạc (Granular Event Protocol)**: Thay vì tải lại toàn bộ danh sách, server chỉ gửi một gói tin sự kiện nhỏ (`task_created`, `task_updated`, `task_deleted`) kèm dữ liệu task tương ứng. Client tự cập nhật DOM tương ứng.
+  3. **Nhận biết cộng tác viên (Multi-User Awareness)**: Hiển thị số lượng và danh sách người dùng đang online trên giao diện.
+  4. **Tiền đề kiến trúc cho Version 4 (P2P Direct Sync)**: Định dạng sự kiện JSON được thiết kế chuẩn hóa để khi chuyển sang Version 4 (P2P qua WebRTC DataChannel khi mất server), logic xử lý sự kiện ở client hoàn toàn được tái sử dụng mà không cần viết lại.
+
+### 2. So sánh kiến trúc V3 (Polling) vs V3.5 (SSE) vs V4 (P2P Tiền đề)
+
+```mermaid
+graph LR
+    subgraph V3["V3: Polling (Pull)"]
+        A3["Client A"] -->|"GET /api/tasks (mỗi 2.5s)"| S3["Server"]
+        B3["Client B"] -->|"GET /api/tasks (mỗi 2.5s)"| S3
+    end
+
+    subgraph V35["V3.5: SSE Real-time (Push)"]
+        A35["Client A"] <-->|"SSE Event Stream"| S35["Server"]
+        B35["Client B"] <-->|"SSE Event Stream"| S35
+        S35 -->|"Push: task_created / updated"| A35
+        S35 -->|"Push: task_created / updated"| B35
+    end
+
+    subgraph V4["V4: P2P Direct (Mất Server)"]
+        A4["Peer A"] <-.->|"WebRTC DataChannel (cùng định dạng Event)"| B4["Peer B"]
+    end
+
+    V3 -->|"V3.5 nâng cấp giao thức"| V35
+    V35 -->|"V4 kế thừa định dạng sự kiện"| V4
+```
+
+### 3. Minh chứng tách biệt: Các file thay đổi ở Version 3.5
+
+| Thao tác | File | Trách nhiệm kiến trúc |
+| :--- | :--- | :--- |
+| **[TẠO MỚI]** | [event_broadcast.h](file:///home/cheems/Projects/CNPM-W7-TODO/event_broadcast.h) | Interface định nghĩa các loại sự kiện (`event_type_t`) và API quản lý SSE clients. |
+| **[TẠO MỚI]** | [event_broadcast.c](file:///home/cheems/Projects/CNPM-W7-TODO/event_broadcast.c) | Cài đặt lưu trữ mảng file descriptor của client, bảo vệ tương tranh bằng `pthread_mutex_t`, phát hiện client disconnect và broadcast gói tin `text/event-stream`. |
+| **[TẠO MỚI]** | [test_v3_5.sh](file:///home/cheems/Projects/CNPM-W7-TODO/test_v3_5.sh) | Script kiểm chứng tự động 11 kịch bản: SSE streaming, multi-client broadcast, CRUD event dispatch, online awareness. |
+| **[CHỈNH SỬA]** | [server.c](file:///home/cheems/Projects/CNPM-W7-TODO/server.c) | Thêm route `GET /api/events` (giữ connection mở phục vụ SSE) và `GET /api/clients`; gọi `broadcast_event()` sau mỗi thao tác tạo/sửa/xóa thành công. |
+| **[CHỈNH SỬA]** | [Makefile](file:///home/cheems/Projects/CNPM-W7-TODO/Makefile) | Thêm `event_broadcast.c` vào danh sách biên dịch backend. |
+| **[CHỈNH SỬA]** | [public/app.js](file:///home/cheems/Projects/CNPM-W7-TODO/public/app.js) | Kết nối `EventSource`, lắng nghe 5 loại sự kiện SSE để patch state cục bộ tức thì; cơ chế tự động fallback về polling khi mất kết nối. |
+| **[CHỈNH SỬA]** | [public/index.html](file:///home/cheems/Projects/CNPM-W7-TODO/public/index.html) | Bổ sung widget "Online Users Panel", cập nhật phiên bản hiển thị Version 3.5. |
+| **[CHỈNH SỬA]** | [public/style.css](file:///home/cheems/Projects/CNPM-W7-TODO/public/style.css) | Styles hiệu ứng đèn xanh nhấp nháy (pulse), avatar chip cho danh sách người dùng đang online. |
+| **[GIỮ NGUYÊN 100%]** | [task_service.c](file:///home/cheems/Projects/CNPM-W7-TODO/task_service.c) | **Tầng Business Logic hoàn toàn không bị ảnh hưởng.** Quy tắc nghiệp vụ và xác thực công việc giữ nguyên. |
+| **[GIỮ NGUYÊN 100%]** | [sqlite_repository.c](file:///home/cheems/Projects/CNPM-W7-TODO/sqlite_repository.c) | **Tầng Data Access hoàn toàn không bị ảnh hưởng.** Cấu trúc bảng SQLite và các hàm thao tác database giữ nguyên. |
+
+---
+
+## 💡 Trả lời câu hỏi thảo luận kiến trúc (V3 & V3.5)
 
 > **Câu hỏi 1:** *Đổi SQLite sang một nguồn lưu trữ khác sẽ ảnh hưởng file nào?*
 - **Trả lời:** Chỉ ảnh hưởng duy nhất file cài đặt Repository trong tầng Data Access (ví dụ viết file mới `postgres_repository.c` hoặc `mysql_repository.c` kế thừa `task_repository.h`) và file `Makefile` (thêm thư viện liên kết).  
 - Tầng nghiệp vụ (`task_service.c`), bộ điều khiển HTTP (`server.c`) và toàn bộ mã nguồn giao diện Web (`public/`) hoàn toàn **không cần thay đổi một dòng nào**.
 
-> **Câu hỏi 2:** *Tầng nghiệp vụ có cần biết giao diện Kanban không?*
-- **Trả lời:** **Hoàn toàn không**. Tầng nghiệp vụ (`task_service`) chỉ quan tâm đến các thuộc tính thực thể của công việc (`id`, `title`, `completed`, `created_at`) và các quy tắc xác thực (tiêu đề hợp lệ, ID hợp lệ). Việc dữ liệu được hiển thị dưới dạng danh sách thông thường, bảng Kanban 2 cột, hay sơ đồ phân cấp là trách nhiệm độc quyền của tầng Presentation.
+> **Câu hỏi 2:** *Tầng nghiệp vụ có cần biết giao diện Kanban hoặc cơ chế SSE không?*
+- **Trả lời:** **Hoàn toàn không**. Tầng nghiệp vụ (`task_service`) chỉ quan tâm đến các thuộc tính thực thể của công việc (`id`, `title`, `completed`, `created_at`) và các quy tắc xác thực (tiêu đề hợp lệ, ID hợp lệ). Việc dữ liệu hiển thị dạng danh sách hay Kanban, hoặc được đẩy qua SSE hay REST Polling là trách nhiệm riêng của tầng Presentation/Communication.
 
-> **Câu hỏi 3:** *Có bằng chứng tách biệt giữa thay đổi UI và thay đổi Database không?*
+> **Câu hỏi 3:** *Có bằng chứng tách biệt giữa thay đổi UI, thay đổi Database và thay đổi cơ chế giao tiếp Real-time không?*
 - **Trả lời:** Có. Bằng chứng rõ ràng qua lịch sử commit:
-  - Khi thay đổi UI sang bảng Kanban, chỉ các tệp trong thư mục [public/](file:///home/cheems/Projects/CNPM-W7-TODO/public) thay đổi. Backend hoàn toàn giữ nguyên contract API REST.
-  - Khi thay đổi lưu trữ từ JSON sang SQLite, chúng tôi chỉ tạo mới [sqlite_repository.c](file:///home/cheems/Projects/CNPM-W7-TODO/sqlite_repository.c) và [task_repository.h](file:///home/cheems/Projects/CNPM-W7-TODO/task_repository.h). Giao diện Kanban không cần biết câu truy vấn SQL bên dưới là gì.
+  - Khi thay đổi UI sang bảng Kanban (V3), chỉ các tệp trong thư mục [public/](file:///home/cheems/Projects/CNPM-W7-TODO/public) thay đổi.
+  - Khi thay đổi lưu trữ từ JSON sang SQLite (V3), chỉ tạo mới [sqlite_repository.c](file:///home/cheems/Projects/CNPM-W7-TODO/sqlite_repository.c) và [task_repository.h](file:///home/cheems/Projects/CNPM-W7-TODO/task_repository.h).
+  - Khi nâng cấp lên Real-time SSE (V3.5), tầng Business Logic (`task_service.c`) và tầng Data Access (`sqlite_repository.c`) được giữ nguyên 100%.
+
+> **Câu hỏi 4:** *Version 3.5 đóng vai trò gì làm tiền đề cho Version 4 (P2P khi mất server)?*
+- **Trả lời:** Version 3.5 chuẩn hóa **Event Protocol** (`task_created`, `task_updated`, `task_deleted`) với payload JSON đồng nhất. Trong Version 4, khi server trung tâm mất kết nối, hai máy trong cùng mạng LAN chỉ cần hoán đổi tầng truyền tải từ **SSE (Server Push)** sang **WebRTC DataChannel (Peer-to-Peer Direct)**. Tầng xử lý sự kiện và cập nhật giao diện Kanban ở client giữ nguyên hoàn toàn logic đã được kiểm chứng ở V3.5.

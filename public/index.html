@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TaskFlow | Bảng Kanban quản lý công việc - Version 3 (SQLite & N-Layer)</title>
-  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 3 bảng Kanban 2 cột, kiến trúc N-Layer và lưu trữ SQLite database.">
+  <title>TaskFlow | Bảng Kanban quản lý công việc - Version 3.5 (SSE Real-time & N-Layer)</title>
+  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 3.5 SSE real-time đa người dùng, kiến trúc N-Layer và lưu trữ SQLite database.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -27,9 +27,9 @@
         <div>
           <div class="eyebrow-tag">
             <span class="badge-dot"></span>
-            CNPM Tuần 7 • Kiến trúc N-Layer & Bảng Kanban
+            CNPM Tuần 7 • N-Layer + SSE Real-time Collaboration
           </div>
-          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V3 • SQLite & Kanban</span></h1>
+          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V3.5 • SSE Real-time</span></h1>
         </div>
       </div>
 
@@ -41,18 +41,18 @@
             <span class="status-value" id="status-text">Đang kết nối...</span>
           </div>
         </div>
-        <div class="storage-badge" title="Cơ sở dữ liệu SQLite đã thay thế JSON file">
+        <div class="storage-badge" title="Cơ sở dữ liệu SQLite + SSE Real-time">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <ellipse cx="12" cy="5" rx="9" ry="3"/>
             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
           </svg>
-          <code>tasks.db (SQLite3)</code>
+          <code>tasks.db + SSE</code>
         </div>
       </div>
     </header>
 
-    <!-- Multi-Client & Network Collaboration Bar (V2+V3) -->
+    <!-- Multi-Client & Network Collaboration Bar (V3.5: SSE Real-time) -->
     <section class="network-bar glass-card">
       <div class="network-left">
         <div class="client-badge" id="client-badge" title="Định danh thiết bị / trình duyệt hiện tại">
@@ -71,9 +71,16 @@
           </button>
         </div>
 
+        <!-- V3.5: Online Users Panel -->
+        <div class="online-users-panel" id="online-users-panel">
+          <span class="online-dot"></span>
+          <span class="online-label" id="online-count">0 người online</span>
+          <div class="online-avatars" id="online-avatars"></div>
+        </div>
+
         <div class="sync-status-badge">
           <span class="sync-dot pulsing" id="sync-dot"></span>
-          <span id="sync-text">Tự động đồng bộ: 2.5s</span>
+          <span id="sync-text">Đang kết nối SSE...</span>
         </div>
       </div>
 
@@ -255,7 +262,7 @@
         </div>
       </section>
 
-      <!-- Architecture Card (V3 Explanation) -->
+      <!-- Architecture Card (V3.5 Explanation) -->
       <section class="info-card glass-card">
         <div class="info-header">
           <div class="info-badge">
@@ -264,9 +271,9 @@
               <line x1="12" y1="16" x2="12" y2="12"/>
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            Thông tin kiến trúc Version 3: N-Layer & Thay đổi Nguồn lưu trữ / UI
+            Thông tin kiến trúc Version 3.5: N-Layer + SSE Real-time Collaboration
           </div>
-          <span class="info-sub">Đề bài: Đổi UI sang Kanban 2 cột, đổi lưu trữ sang SQLite, không mất task cũ</span>
+          <span class="info-sub">Nâng cấp: Thay HTTP Polling bằng SSE real-time, thêm nhận biết người dùng online</span>
         </div>
         <div class="info-grid">
           <div class="info-item">
@@ -274,16 +281,16 @@
             <span class="info-val">Presentation (<code>server.c</code> + Web) &harr; Business Service (<code>task_service.c</code>) &harr; Data Repository (<code>sqlite_repository.c</code>)</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Nguồn lưu trữ mới</span>
-            <span class="info-val">Cơ sở dữ liệu SQLite (<code>tasks.db</code>) với chuẩn giao dịch ACID và WAL mode</span>
+            <span class="info-key">Đồng bộ Real-time (V3.5 mới)</span>
+            <span class="info-val">Server-Sent Events qua <code>GET /api/events</code> — push thay đổi ngay lập tức thay vì polling 2.5s. Format event <code>task_created/updated/deleted</code> cũng là nền tảng cho V4 P2P.</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Data Migration</span>
-            <span class="info-val">Tự động chuyển đổi toàn bộ task cũ từ <code>tasks.json</code> sang <code>tasks.db</code> không mất dữ liệu</span>
+            <span class="info-key">Online Awareness (V3.5 mới)</span>
+            <span class="info-val">Biết ai đang kết nối qua <code>GET /api/clients</code>; SSE phát sự kiện <code>client_joined/left</code> khi ai tham gia/rời đi</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Giao diện mới</span>
-            <span class="info-val">Bảng Kanban 2 cột (Chưa xong &harr; Đã xong) hỗ trợ kéo thả trực quan</span>
+            <span class="info-key">Nguồn lưu trữ</span>
+            <span class="info-val">SQLite (<code>tasks.db</code>) với ACID và WAL mode — không thay đổi từ V3</span>
           </div>
         </div>
       </section>
