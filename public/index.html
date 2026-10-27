@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TaskFlow | Quản lý công việc - Version 1 (C Backend)</title>
+  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 1 chạy cục bộ với C Backend và lưu trữ JSON file.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="ambient-glow glow-1"></div>
+  <div class="ambient-glow glow-2"></div>
+
+  <div class="app-layout">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+        </div>
+        <div>
+          <div class="eyebrow-tag">
+            <span class="badge-dot"></span>
+            CNPM Tuần 7 • Tiến hóa kiến trúc
+          </div>
+          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V1 • Local C Backend</span></h1>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <div class="status-card" id="server-status-card">
+          <span class="pulse-indicator" id="status-indicator"></span>
+          <div class="status-text">
+            <span class="status-label">C Server Status</span>
+            <span class="status-value" id="status-text">Đang kết nối...</span>
+          </div>
+        </div>
+        <div class="storage-badge">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <code>tasks.json</code>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Input Card -->
+      <section class="task-input-section glass-card">
+        <form id="task-form" class="task-form">
+          <div class="input-group">
+            <span class="input-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+            </span>
+            <input 
+              type="text" 
+              id="task-title-input" 
+              class="task-input" 
+              placeholder="Nhập tên công việc cần làm... (Ví dụ: Đọc tài liệu kiến trúc tuần 7)" 
+              autocomplete="off"
+              required
+            >
+          </div>
+          <button type="submit" id="add-task-btn" class="btn btn-primary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>Thêm công việc</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Stats & Progress -->
+      <section class="stats-grid">
+        <div class="stat-card glass-card">
+          <div class="stat-meta">
+            <span class="stat-label">Tổng công việc</span>
+            <span class="stat-num" id="stat-total">0</span>
+          </div>
+          <div class="stat-icon icon-total">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M7 8h10M7 12h10M7 16h6"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="stat-card glass-card">
+          <div class="stat-meta">
+            <span class="stat-label">Chờ thực hiện</span>
+            <span class="stat-num text-pending" id="stat-pending">0</span>
+          </div>
+          <div class="stat-icon icon-pending">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="stat-card glass-card">
+          <div class="stat-meta">
+            <span class="stat-label">Đã hoàn thành</span>
+            <span class="stat-num text-completed" id="stat-completed">0</span>
+          </div>
+          <div class="stat-icon icon-completed">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+              <polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="stat-card glass-card progress-stat-card">
+          <div class="stat-meta">
+            <span class="stat-label">Tiến độ hoàn thành</span>
+            <span class="stat-num" id="stat-percent">0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="progress-bar" style="width: 0%"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Filter Controls & Header -->
+      <section class="controls-bar glass-card">
+        <div class="filter-tabs" role="tablist">
+          <button class="filter-tab active" data-filter="all" id="filter-all">
+            Tất cả (<span id="count-all">0</span>)
+          </button>
+          <button class="filter-tab" data-filter="active" id="filter-active">
+            Chưa làm (<span id="count-active">0</span>)
+          </button>
+          <button class="filter-tab" data-filter="completed" id="filter-completed">
+            Đã xong (<span id="count-completed">0</span>)
+          </button>
+        </div>
+
+        <div class="action-buttons">
+          <button class="btn btn-secondary btn-sm" id="refresh-btn" title="Làm mới từ server">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Làm mới
+          </button>
+          <a class="btn btn-secondary btn-sm" href="/tasks.json" target="_blank" title="Xem trực tiếp tasks.json">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            Xem tasks.json
+          </a>
+        </div>
+      </section>
+
+      <!-- Task List Container -->
+      <section class="task-list-section">
+        <div id="loading-state" class="state-message">
+          <div class="spinner"></div>
+          <p>Đang nạp dữ liệu từ backend C...</p>
+        </div>
+
+        <div id="empty-state" class="state-message glass-card" style="display: none;">
+          <div class="empty-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 12h8"/>
+            </svg>
+          </div>
+          <h3>Chưa có công việc nào</h3>
+          <p>Hãy nhập tên công việc ở trên và bấm "Thêm công việc" để lưu vào <code>tasks.json</code>.</p>
+        </div>
+
+        <ul class="task-list" id="task-list" aria-label="Danh sách công việc">
+          <!-- Dynamically populated -->
+        </ul>
+      </section>
+
+      <!-- Architecture Card (V1 Explanation) -->
+      <section class="info-card glass-card">
+        <div class="info-header">
+          <div class="info-badge">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            Thông tin kiến trúc Version 1
+          </div>
+          <span class="info-sub">Đề bài: Ứng dụng ban đầu chạy cục bộ trên một máy</span>
+        </div>
+        <div class="info-grid">
+          <div class="info-item">
+            <span class="info-key">Frontend</span>
+            <span class="info-val">Single Page Application thuần (HTML5, Vanilla CSS, JS)</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Backend</span>
+            <span class="info-val">C HTTP Server (POSIX Sockets, <code>pthread</code>, <code>cJSON</code>)</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Lưu trữ</span>
+            <span class="info-val">Tệp cục bộ <code>tasks.json</code> (Atomic rename on flush)</span>
+          </div>
+          <div class="info-item">
+            <span class="info-key">Kiểm chứng NFR</span>
+            <span class="info-val">Tạo 2 task, hoàn thành 1 task, khởi động lại server &rarr; Dữ liệu bảo toàn</span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
