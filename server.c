@@ -474,17 +474,17 @@ static void *handle_client(void *arg) {
         return NULL;
     }
 
-    /* Architecture info (updated to V3.5) */
+    /* Architecture info (updated to V4) */
     if (strcmp(path, "/api/info") == 0) {
         int count   = task_service_count();
         int online  = broadcast_get_client_count();
         char info_json[768];
         snprintf(info_json, sizeof(info_json),
-            "{\"version\":\"V3.5\","
-            "\"architecture\":\"N-Layer (Presentation, Service, SQLite Repository) + SSE Real-time\","
-            "\"storage\":\"tasks.db (SQLite3)\","
+            "{\"version\":\"V4\","
+            "\"architecture\":\"N-Layer (Presentation, Service, SQLite Repository) + SSE + WebRTC DataChannel (P2P Fallback)\","
+            "\"storage\":\"tasks.db (SQLite3) / Local In-Memory P2P State\","
             "\"ui\":\"Kanban 2-Column Board\","
-            "\"sync\":\"Server-Sent Events (real-time push)\","
+            "\"sync\":\"Server-Sent Events (Central) + WebRTC DataChannel (Direct P2P)\","
             "\"online_clients\":%d,"
             "\"task_count\":%d,"
             "\"timestamp\":%ld}",

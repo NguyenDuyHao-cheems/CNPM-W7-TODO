@@ -35,7 +35,7 @@ trap cleanup EXIT
 echo "[3/8] Checking V2/V3 server connectivity and /api/info..."
 INFO_RESP=$(curl -s -f "$URL/api/info")
 echo "  -> Server Info: $INFO_RESP"
-echo "$INFO_RESP" | grep -q -E '"version":"(V2|V3|V3\.5)"' || { echo "FAILED: Server version should be V2, V3, or V3.5!"; exit 1; }
+echo "$INFO_RESP" | grep -q -E '"version":"(V2|V3|V3\.5|V4)"' || { echo "FAILED: Server version should be V2, V3, V3.5, or V4!"; exit 1; }
 
 # Step 1 in V2 Rubric: Client A creates a task
 echo "[4/8] [Client A (Máy tính)] Tạo task mới..."

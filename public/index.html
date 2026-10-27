@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TaskFlow | Bảng Kanban quản lý công việc - Version 3.5 (SSE Real-time & N-Layer)</title>
-  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 3.5 SSE real-time đa người dùng, kiến trúc N-Layer và lưu trữ SQLite database.">
+  <title>TaskFlow | Bảng Kanban quản lý công việc - Version 4 (P2P Collaboration & WebRTC DataChannel)</title>
+  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 4 cộng tác trực tiếp Peer-to-Peer qua WebRTC DataChannel khi mất server trung tâm.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -27,9 +27,9 @@
         <div>
           <div class="eyebrow-tag">
             <span class="badge-dot"></span>
-            CNPM Tuần 7 • N-Layer + SSE Real-time Collaboration
+            CNPM Tuần 7 • N-Layer + SSE + P2P WebRTC DataChannel
           </div>
-          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V3.5 • SSE Real-time</span></h1>
+          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V4 • P2P WebRTC Direct</span></h1>
         </div>
       </div>
 
@@ -41,18 +41,18 @@
             <span class="status-value" id="status-text">Đang kết nối...</span>
           </div>
         </div>
-        <div class="storage-badge" title="Cơ sở dữ liệu SQLite + SSE Real-time">
+        <div class="storage-badge" title="Cơ sở dữ liệu SQLite + SSE + P2P Fallback">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <ellipse cx="12" cy="5" rx="9" ry="3"/>
             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
           </svg>
-          <code>tasks.db + SSE</code>
+          <code>tasks.db + P2P</code>
         </div>
       </div>
     </header>
 
-    <!-- Multi-Client & Network Collaboration Bar (V3.5: SSE Real-time) -->
+    <!-- Multi-Client & Network Collaboration Bar (V4: SSE + P2P Direct) -->
     <section class="network-bar glass-card">
       <div class="network-left">
         <div class="client-badge" id="client-badge" title="Định danh thiết bị / trình duyệt hiện tại">
@@ -82,6 +82,21 @@
           <span class="sync-dot pulsing" id="sync-dot"></span>
           <span id="sync-text">Đang kết nối SSE...</span>
         </div>
+
+        <!-- V4: P2P DataChannel Status & Trigger -->
+        <div class="p2p-badge" id="p2p-badge" title="Trạng thái kết nối P2P WebRTC trực tiếp">
+          <span class="p2p-dot disconnected" id="p2p-dot"></span>
+          <span class="p2p-text" id="p2p-text">P2P: Chưa kết nối</span>
+          <button type="button" class="btn-p2p-action" id="btn-open-p2p-modal" title="Mở cấu hình kết nối P2P">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v1"/>
+              <path d="M18 8l4 4-4 4"/>
+              <path d="M8 12h14"/>
+            </svg>
+            Kết nối P2P
+          </button>
+        </div>
+      </div>
       </div>
 
       <div class="network-right">
@@ -262,7 +277,7 @@
         </div>
       </section>
 
-      <!-- Architecture Card (V3.5 Explanation) -->
+      <!-- Architecture Card (V4 Explanation) -->
       <section class="info-card glass-card">
         <div class="info-header">
           <div class="info-badge">
@@ -271,30 +286,111 @@
               <line x1="12" y1="16" x2="12" y2="12"/>
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            Thông tin kiến trúc Version 3.5: N-Layer + SSE Real-time Collaboration
+            Thông tin kiến trúc Version 4: P2P Direct Collaboration (WebRTC DataChannel)
           </div>
-          <span class="info-sub">Nâng cấp: Thay HTTP Polling bằng SSE real-time, thêm nhận biết người dùng online</span>
+          <span class="info-sub">NFR: High Availability khi server trung tâm gặp sự cố; hòa giải xung đột bằng Lamport Logical Timestamp (LWW)</span>
         </div>
         <div class="info-grid">
           <div class="info-item">
-            <span class="info-key">Kiến trúc N-Layer</span>
-            <span class="info-val">Presentation (<code>server.c</code> + Web) &harr; Business Service (<code>task_service.c</code>) &harr; Data Repository (<code>sqlite_repository.c</code>)</span>
+            <span class="info-key">Kiến trúc N-Layer + P2P</span>
+            <span class="info-val">Khi server hoạt động: Client–Server &rarr; SQLite3 &rarr; SSE Broadcast. Khi server sập: WebRTC DataChannel truyền gói tin JSON trực tiếp giữa 2 trình duyệt không qua server trung gian.</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Đồng bộ Real-time (V3.5 mới)</span>
-            <span class="info-val">Server-Sent Events qua <code>GET /api/events</code> — push thay đổi ngay lập tức thay vì polling 2.5s. Format event <code>task_created/updated/deleted</code> cũng là nền tảng cho V4 P2P.</span>
+            <span class="info-key">Đồng bộ P2P khi mất Server (V4)</span>
+            <span class="info-val">Sử dụng WebRTC <code>RTCDataChannel</code> (kênh <code>taskflow-p2p</code>). Tái sử dụng Granular Event Protocol từ V3.5 (<code>task_created</code>, <code>task_updated</code>, <code>task_deleted</code>).</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Online Awareness (V3.5 mới)</span>
-            <span class="info-val">Biết ai đang kết nối qua <code>GET /api/clients</code>; SSE phát sự kiện <code>client_joined/left</code> khi ai tham gia/rời đi</span>
+            <span class="info-key">Hòa giải dữ liệu (Conflict Resolution)</span>
+            <span class="info-val">Áp dụng <b>Last-Write-Wins (LWW) kết hợp Lamport Logical Timestamp</b>: Mỗi mutation mang <code>lamport_ts</code> và <code>peer_id</code>; bản ghi có timestamp cao hơn sẽ thắng khi xảy ra xung đột đồng thời.</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Nguồn lưu trữ</span>
-            <span class="info-val">SQLite (<code>tasks.db</code>) với ACID và WAL mode — không thay đổi từ V3</span>
+            <span class="info-key">Phương thức Signaling</span>
+            <span class="info-val">Hỗ trợ 2 chế độ: <b>1-Click Local Tab Sync</b> (qua <code>BroadcastChannel</code> giữa 2 tab thử nghiệm) và <b>Manual SDP Exchange</b> (sao chép chuỗi mã hóa qua LAN không cần bất kỳ server nào).</span>
           </div>
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- P2P WebRTC Direct Connection Modal -->
+  <div id="p2p-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog glass-card">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </div>
+          <div>
+            <h3 class="modal-title">Cấu hình kết nối P2P (WebRTC DataChannel)</h3>
+            <p class="modal-subtitle">Giao tiếp trực tiếp giữa 2 thiết bị khi server trung tâm mất kết nối</p>
+          </div>
+        </div>
+        <button type="button" class="btn-close-modal" id="btn-close-p2p-modal" aria-label="Đóng">&times;</button>
+      </div>
+
+      <!-- P2P Tabs -->
+      <div class="modal-tabs">
+        <button type="button" class="tab-btn active" id="tab-btn-fast">⚡ Ghép nối 1-Click (2 tab cùng máy)</button>
+        <button type="button" class="tab-btn" id="tab-btn-manual">🌐 Mã thủ công SDP (Mạng LAN)</button>
+      </div>
+
+      <!-- Tab 1: Fast 1-Click pairing -->
+      <div class="tab-pane active" id="pane-fast">
+        <div class="p2p-step-box">
+          <p class="step-guide">Sử dụng kênh phát sóng cục bộ (<code>BroadcastChannel</code>) để tự động trao đổi thông điệp WebRTC Offer/Answer trong vài mili-giây mà không cần copy paste thủ công!</p>
+          <div class="fast-actions">
+            <button type="button" class="btn btn-primary" id="btn-fast-pair">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+              Bấm để ghép nối với Tab kia ngay
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-p2p-disconnect" style="display:none;">
+              Ngắt kết nối P2P
+            </button>
+          </div>
+          <div class="fast-log-box" id="p2p-status-details">
+            Trạng thái P2P: Sẵn sàng kết nối
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Manual SDP token exchange -->
+      <div class="tab-pane" id="pane-manual" style="display: none;">
+        <div class="p2p-manual-grid">
+          <!-- Peer A: Create Offer -->
+          <div class="manual-step">
+            <h4>1. Dành cho Máy A (Khởi tạo Offer)</h4>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-generate-offer">Tạo mã kết nối (Offer)</button>
+            <textarea id="offer-sdp-output" class="sdp-textarea" readonly placeholder="Mã SDP Offer sẽ hiển thị ở đây..."></textarea>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-offer" disabled>Sao chép mã Offer</button>
+
+            <h4 style="margin-top: 14px;">3. Dán mã Trả lời từ Máy B (Answer)</h4>
+            <textarea id="answer-sdp-input" class="sdp-textarea" placeholder="Dán mã Answer từ Máy B vào đây..."></textarea>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-accept-answer">Hoàn tất kết nối</button>
+          </div>
+
+          <!-- Peer B: Accept Offer & Create Answer -->
+          <div class="manual-step">
+            <h4>2. Dành cho Máy B (Nhận Offer & Trả lời)</h4>
+            <textarea id="offer-sdp-input" class="sdp-textarea" placeholder="Dán mã Offer từ Máy A vào đây..."></textarea>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-generate-answer">Tạo mã Trả lời (Answer)</button>
+            <textarea id="answer-sdp-output" class="sdp-textarea" readonly placeholder="Mã SDP Answer sẽ hiển thị ở đây..."></textarea>
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-answer" disabled>Sao chép mã Answer</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <span class="p2p-note">💡 Sau khi P2P kết nối thành công, bạn có thể <b>tắt hẳn server backend</b> (Ctrl+C hoặc <code>pkill -f server</code>). Hai máy vẫn tạo và chuyển trạng thái task trực tiếp cho nhau bình thường!</span>
+      </div>
+    </div>
   </div>
 
   <!-- Toast Notification Container -->

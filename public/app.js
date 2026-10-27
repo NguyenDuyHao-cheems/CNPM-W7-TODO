@@ -1,62 +1,105 @@
 /**
- * TaskFlow - Version 3.5 (Real-time SSE Collaboration + N-Layer SQLite Backend)
+ * TaskFlow - Version 4 (P2P Collaboration via WebRTC DataChannel + N-Layer SQLite Backend)
  * CNPM Tuần 7: Tiến hóa kiến trúc ứng dụng quản lý công việc
  *
- * V3.5 changes:
- *  - Replaced 2.5s HTTP polling with Server-Sent Events (SSE) for real-time sync
- *  - Added online user awareness panel
- *  - Event-based change protocol (task_created / task_updated / task_deleted)
- *    — same format that V4 P2P WebRTC DataChannel will reuse
- *  - Polling retained as automatic fallback when SSE is disconnected
+ * V4 features:
+ *  - High Availability when central server loses connection
+ *  - Direct Peer-to-Peer synchronization via WebRTC RTCDataChannel
+ *  - 1-Click Fast Pairing (via BroadcastChannel for 2 tabs on the same machine)
+ *  - Manual SDP Token Exchange (for independent cross-device LAN operation without any server)
+ *  - Last-Write-Wins (LWW) conflict resolution with Logical / Lamport Timestamp
+ *  - Seamless offline-first fallback: CRUD operations update local state and broadcast via DataChannel
  */
 
-const API_BASE        = '/api/tasks';
+const API_BASE         = '/api/tasks';
 const POLL_INTERVAL_MS = 2500;
 
+// WebRTC Configuration: Public Google STUN servers + LAN local host candidates
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ]
+};
+
 // Application State
-let tasks         = [];
-let isInitialLoad = true;
-let isPolling     = false;
+let tasks          = [];
+let isInitialLoad  = true;
+let isPolling      = false;
+let isServerOnline = true;
 
-// DOM Elements
-const taskForm       = document.getElementById('task-form');
-const taskInput      = document.getElementById('task-title-input');
-const loadingState   = document.getElementById('loading-state');
-const refreshBtn     = document.getElementById('refresh-btn');
-const toastContainer = document.getElementById('toast-container');
+// Logical / Lamport Timestamp Clock for Last-Write-Wins (LWW) Conflict Resolution
+let lamportClock   = 0;
 
-// Kanban Elements
-const listPending        = document.getElementById('list-pending');
-const listCompleted      = document.getElementById('list-completed');
-const dropzonePending    = document.getElementById('dropzone-pending');
-const dropzoneCompleted  = document.getElementById('dropzone-completed');
-const badgePendingCount  = document.getElementById('badge-pending-count');
-const badgeCompletedCount= document.getElementById('badge-completed-count');
-const emptyHintPending   = document.getElementById('empty-hint-pending');
-const emptyHintCompleted = document.getElementById('empty-hint-completed');
+// WebRTC P2P State
+let p2pConnection       = null;
+let p2pChannel          = null;
+let p2pSignalingChannel = null;
+let p2pStatus           = 'disconnected'; // 'disconnected' | 'connecting' | 'connected'
 
-// Multi-Client / Network Elements
-const clientNameEl    = document.getElementById('client-name');
-const renameClientBtn = document.getElementById('rename-client-btn');
-const syncDot         = document.getElementById('sync-dot');
-const syncText        = document.getElementById('sync-text');
-const shareUrlText    = document.getElementById('share-url-text');
-const copyShareUrlBtn = document.getElementById('copy-share-url-btn');
+// DOM Elements - General
+const taskForm        = document.getElementById('task-form');
+const taskInput       = document.getElementById('task-title-input');
+const loadingState    = document.getElementById('loading-state');
+const refreshBtn      = document.getElementById('refresh-btn');
+const toastContainer  = document.getElementById('toast-container');
 
-// Online users panel
-const onlineCountEl  = document.getElementById('online-count');
-const onlineAvatarsEl= document.getElementById('online-avatars');
+// DOM Elements - Kanban Board
+const listPending         = document.getElementById('list-pending');
+const listCompleted       = document.getElementById('list-completed');
+const dropzonePending     = document.getElementById('dropzone-pending');
+const dropzoneCompleted   = document.getElementById('dropzone-completed');
+const badgePendingCount   = document.getElementById('badge-pending-count');
+const badgeCompletedCount = document.getElementById('badge-completed-count');
+const emptyHintPending    = document.getElementById('empty-hint-pending');
+const emptyHintCompleted  = document.getElementById('empty-hint-completed');
 
-// Stats Elements
-const statTotal     = document.getElementById('stat-total');
-const statPending   = document.getElementById('stat-pending');
-const statCompleted = document.getElementById('stat-completed');
-const statPercent   = document.getElementById('stat-percent');
-const progressBar   = document.getElementById('progress-bar');
+// DOM Elements - Network Bar & Online Panel
+const clientNameEl     = document.getElementById('client-name');
+const renameClientBtn  = document.getElementById('rename-client-btn');
+const syncDot          = document.getElementById('sync-dot');
+const syncText         = document.getElementById('sync-text');
+const shareUrlText     = document.getElementById('share-url-text');
+const copyShareUrlBtn  = document.getElementById('copy-share-url-btn');
+const onlineCountEl    = document.getElementById('online-count');
+const onlineAvatarsEl  = document.getElementById('online-avatars');
 
-// Status Elements
+// DOM Elements - Statistics
+const statTotal      = document.getElementById('stat-total');
+const statPending    = document.getElementById('stat-pending');
+const statCompleted  = document.getElementById('stat-completed');
+const statPercent    = document.getElementById('stat-percent');
+const progressBar    = document.getElementById('progress-bar');
+
+// DOM Elements - Server Status
 const statusIndicator = document.getElementById('status-indicator');
-const statusText      = document.getElementById('status-text');
+const statusText       = document.getElementById('status-text');
+
+// DOM Elements - V4 P2P Controls & Modal
+const p2pBadge          = document.getElementById('p2p-badge');
+const p2pDot            = document.getElementById('p2p-dot');
+const p2pText           = document.getElementById('p2p-text');
+const btnOpenP2pModal   = document.getElementById('btn-open-p2p-modal');
+const p2pModal          = document.getElementById('p2p-modal');
+const btnCloseP2pModal  = document.getElementById('btn-close-p2p-modal');
+const tabBtnFast        = document.getElementById('tab-btn-fast');
+const tabBtnManual      = document.getElementById('tab-btn-manual');
+const paneFast          = document.getElementById('pane-fast');
+const paneManual        = document.getElementById('pane-manual');
+const btnFastPair       = document.getElementById('btn-fast-pair');
+const btnP2pDisconnect  = document.getElementById('btn-p2p-disconnect');
+const p2pStatusDetails  = document.getElementById('p2p-status-details');
+
+// DOM Elements - Manual SDP Token Exchange
+const btnGenerateOffer  = document.getElementById('btn-generate-offer');
+const offerSdpOutput    = document.getElementById('offer-sdp-output');
+const btnCopyOffer      = document.getElementById('btn-copy-offer');
+const offerSdpInput     = document.getElementById('offer-sdp-input');
+const btnGenerateAnswer = document.getElementById('btn-generate-answer');
+const answerSdpOutput   = document.getElementById('answer-sdp-output');
+const btnCopyAnswer     = document.getElementById('btn-copy-answer');
+const answerSdpInput    = document.getElementById('answer-sdp-input');
+const btnAcceptAnswer   = document.getElementById('btn-accept-answer');
 
 // =============================================================================
 // Client identity
@@ -65,25 +108,28 @@ const statusText      = document.getElementById('status-text');
 function initClientIdentity() {
   let clientName = sessionStorage.getItem('taskflow_client_name');
   if (!clientName) {
-    const letters    = ['A', 'B', 'C', 'D', 'E', 'F'];
+    const letters      = ['A', 'B', 'C', 'D', 'E', 'F'];
     const randomLetter = letters[Math.floor(Math.random() * letters.length)];
     const randomNum    = Math.floor(100 + Math.random() * 900);
     clientName = `Thiết bị ${randomLetter} (#${randomNum})`;
     sessionStorage.setItem('taskflow_client_name', clientName);
   }
   if (clientNameEl) clientNameEl.textContent = clientName;
-  if (shareUrlText) shareUrlText.textContent  = window.location.origin;
+  if (shareUrlText) shareUrlText.textContent = window.location.origin;
+}
+
+function getClientName() {
+  return sessionStorage.getItem('taskflow_client_name') || 'Thiết bị';
 }
 
 if (renameClientBtn) {
   renameClientBtn.addEventListener('click', () => {
-    const current = sessionStorage.getItem('taskflow_client_name') || 'Thiết bị';
-    const newName  = prompt('Nhập tên đại diện cho thiết bị / trình duyệt này:', current);
+    const current = getClientName();
+    const newName = prompt('Nhập tên đại diện cho thiết bị / trình duyệt này:', current);
     if (newName && newName.trim()) {
       sessionStorage.setItem('taskflow_client_name', newName.trim());
       if (clientNameEl) clientNameEl.textContent = newName.trim();
       showToast(`Đã đổi tên thiết bị thành: "${newName.trim()}"`, 'info');
-      // Reconnect SSE with new name
       reconnectSSE();
     }
   });
@@ -101,7 +147,7 @@ if (copyShareUrlBtn) {
 }
 
 // =============================================================================
-// Toast
+// Toast & UI Alerts
 // =============================================================================
 
 function showToast(message, type = 'info') {
@@ -116,39 +162,34 @@ function showToast(message, type = 'info') {
   toastContainer.appendChild(toast);
 
   setTimeout(() => {
-    toast.style.opacity   = '0';
-    toast.style.transform = 'translateY(10px)';
-    toast.style.transition= 'all 0.25s ease';
+    toast.style.opacity    = '0';
+    toast.style.transform  = 'translateY(10px)';
+    toast.style.transition = 'all 0.25s ease';
     setTimeout(() => toast.remove(), 250);
-  }, 3200);
+  }, 3500);
 }
 
 // =============================================================================
-// Server status
+// Server Status & Online Panel
 // =============================================================================
 
 function setServerStatus(online, details = '') {
+  isServerOnline = online;
   if (online) {
     statusIndicator.className = 'pulse-indicator connected';
-    statusText.textContent    = details || 'SQLite Backend :8080';
+    statusText.textContent    = details || 'SQLite Backend :8080 (Online)';
   } else {
     statusIndicator.className = 'pulse-indicator error';
-    statusText.textContent    = details || 'Mất kết nối server';
+    statusText.textContent    = details || 'Mất kết nối server (Offline)';
   }
 }
 
-// =============================================================================
-// Online users panel
-// =============================================================================
-
 function updateOnlineUsers(data) {
   if (!data) return;
-
   const count = data.online_count ?? 0;
   if (onlineCountEl) {
     onlineCountEl.textContent = `${count} người online`;
   }
-
   if (onlineAvatarsEl && Array.isArray(data.clients)) {
     onlineAvatarsEl.innerHTML = data.clients
       .map(c => `<span class="online-avatar-chip" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span>`)
@@ -185,7 +226,473 @@ function escapeHtml(text) {
 }
 
 // =============================================================================
-// REST API helpers (unchanged from V3)
+// Version 4: WebRTC DataChannel P2P Manager
+// =============================================================================
+
+function updateP2PUI(status, label = '', details = '') {
+  p2pStatus = status;
+  if (!p2pDot || !p2pText) return;
+
+  p2pDot.className = `p2p-dot ${status}`;
+  if (status === 'connected') {
+    p2pText.textContent = label || 'P2P: Trực tiếp (DataChannel) ✓';
+    if (btnFastPair) btnFastPair.style.display = 'none';
+    if (btnP2pDisconnect) btnP2pDisconnect.style.display = 'inline-flex';
+    if (p2pStatusDetails) {
+      p2pStatusDetails.textContent = details || '🟢 Đã kết nối WebRTC DataChannel! Đồng bộ trực tiếp không qua server.';
+      p2pStatusDetails.style.color = '#c084fc';
+    }
+  } else if (status === 'connecting') {
+    p2pText.textContent = label || 'P2P: Đang kết nối...';
+    if (p2pStatusDetails) {
+      p2pStatusDetails.textContent = details || '🟡 Đang trao đổi tín hiệu bắt tay WebRTC...';
+      p2pStatusDetails.style.color = '#f59e0b';
+    }
+  } else {
+    p2pText.textContent = label || 'P2P: Chưa kết nối';
+    if (btnFastPair) {
+      btnFastPair.style.display = 'inline-flex';
+      btnFastPair.disabled = false;
+      btnFastPair.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+        </svg>
+        Bấm để ghép nối với Tab kia ngay
+      `;
+    }
+    if (btnP2pDisconnect) btnP2pDisconnect.style.display = 'none';
+    if (p2pStatusDetails) {
+      p2pStatusDetails.textContent = details || '⚪ Trạng thái P2P: Sẵn sàng kết nối';
+      p2pStatusDetails.style.color = '#cbd5e1';
+    }
+  }
+}
+
+/**
+ * Configure events for an RTCDataChannel
+ */
+function setupDataChannel(channel) {
+  channel.onopen = () => {
+    console.log('[P2P] RTCDataChannel opened successfully');
+    updateP2PUI('connected');
+    showToast('🎉 Kênh P2P WebRTC đã kết nối trực tiếp! Sẵn sàng đồng bộ ngay cả khi tắt server.', 'success');
+
+    // Synchronize current local task state upon initial P2P connection
+    if (tasks.length > 0) {
+      channel.send(JSON.stringify({
+        type: 'initial_sync',
+        data: tasks,
+        lamport_ts: lamportClock,
+        peer_id: getClientName()
+      }));
+    }
+  };
+
+  channel.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleP2PMessage(msg);
+    } catch (err) {
+      console.error('[P2P] Error parsing message:', err);
+    }
+  };
+
+  channel.onclose = () => {
+    console.warn('[P2P] RTCDataChannel closed');
+    updateP2PUI('disconnected', 'P2P: Đã ngắt kết nối', '⚪ Kênh P2P đã đóng.');
+  };
+
+  channel.onerror = (err) => {
+    console.error('[P2P] RTCDataChannel error:', err);
+    updateP2PUI('disconnected', 'P2P: Lỗi kênh truyền', '❌ Lỗi kết nối P2P DataChannel');
+  };
+}
+
+/**
+ * Handle incoming P2P JSON events with Last-Write-Wins (LWW) Lamport Logical Clock
+ */
+function handleP2PMessage(msg) {
+  if (!msg || !msg.type) return;
+
+  // Advance local Lamport logical clock: L = max(local_L, remote_L) + 1
+  const remoteLamport = msg.lamport_ts || 0;
+  lamportClock = Math.max(lamportClock, remoteLamport) + 1;
+
+  switch (msg.type) {
+    case 'task_created': {
+      const newTask = msg.data;
+      if (!tasks.find(t => t.id === newTask.id)) {
+        newTask.is_p2p = true;
+        newTask.lamport_ts = remoteLamport;
+        tasks.unshift(newTask);
+        renderKanban();
+        showToast(`📡 [P2P] Nhận task mới từ Peer: "${newTask.title}"`, 'success');
+      }
+      break;
+    }
+
+    case 'task_updated': {
+      const updated = msg.data;
+      const task = tasks.find(t => t.id === updated.id);
+      if (task) {
+        // Last-Write-Wins (LWW) check: compare Lamport timestamps
+        const localLamport = task.lamport_ts || 0;
+        const remoteWins   = remoteLamport > localLamport ||
+          (remoteLamport === localLamport && (msg.peer_id || '') >= (task.peer_id || ''));
+
+        if (remoteWins) {
+          task.completed  = updated.completed;
+          if (updated.title) task.title = updated.title;
+          task.lamport_ts = remoteLamport;
+          task.peer_id    = msg.peer_id;
+          renderKanban();
+          const statusText = updated.completed ? 'Hoàn thành' : 'Chưa hoàn thành';
+          showToast(`📡 [P2P] Peer đã chuyển task #${task.id} sang "${statusText}"!`, 'info');
+        } else {
+          console.warn(`[LWW Conflict] Local update (ts:${localLamport}) wins over remote update (ts:${remoteLamport}) for task #${task.id}`);
+        }
+      }
+      break;
+    }
+
+    case 'task_deleted': {
+      const { deleted_id } = msg.data;
+      const before = tasks.length;
+      tasks = tasks.filter(t => t.id !== deleted_id);
+      if (tasks.length !== before) {
+        renderKanban();
+        showToast(`📡 [P2P] Peer đã xóa task #${deleted_id}`, 'info');
+      }
+      break;
+    }
+
+    case 'initial_sync': {
+      if (Array.isArray(msg.data)) {
+        let mergedCount = 0;
+        msg.data.forEach(remoteTask => {
+          const local = tasks.find(t => t.id === remoteTask.id);
+          if (!local) {
+            tasks.push(remoteTask);
+            mergedCount++;
+          } else {
+            // LWW comparison
+            if ((remoteTask.lamport_ts || 0) > (local.lamport_ts || 0)) {
+              local.completed  = remoteTask.completed;
+              local.title      = remoteTask.title;
+              local.lamport_ts = remoteTask.lamport_ts;
+            }
+          }
+        });
+        if (mergedCount > 0) {
+          renderKanban();
+          showToast(`📡 [P2P] Đã đồng bộ ${mergedCount} task từ Peer!`, 'info');
+        }
+      }
+      break;
+    }
+
+    default:
+      console.log('[P2P] Unknown message type:', msg);
+  }
+}
+
+/**
+ * Initialize BroadcastChannel for 1-Click Fast Pairing (Same machine / multi-tab)
+ */
+function initP2PSignaling() {
+  if (typeof BroadcastChannel === 'undefined') return;
+
+  p2pSignalingChannel = new BroadcastChannel('taskflow_p2p_channel');
+  p2pSignalingChannel.onmessage = async (e) => {
+    const msg = e.data;
+    if (!msg || msg.from === getClientName()) return;
+
+    if (msg.type === 'signal_offer') {
+      console.log('[P2P Signal] Received Offer from', msg.from);
+      updateP2PUI('connecting', 'P2P: Nhận yêu cầu...', `Đang bắt tay với ${msg.from}...`);
+
+      if (p2pConnection) {
+        try { p2pConnection.close(); } catch {}
+      }
+
+      p2pConnection = new RTCPeerConnection(RTC_CONFIG);
+      p2pConnection.ondatachannel = (ev) => {
+        p2pChannel = ev.channel;
+        setupDataChannel(p2pChannel);
+      };
+
+      p2pConnection.onicecandidate = (ev) => {
+        if (ev.candidate) {
+          p2pSignalingChannel.postMessage({
+            type: 'signal_ice',
+            candidate: ev.candidate,
+            from: getClientName()
+          });
+        }
+      };
+
+      await p2pConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      const answer = await p2pConnection.createAnswer();
+      await p2pConnection.setLocalDescription(answer);
+
+      p2pSignalingChannel.postMessage({
+        type: 'signal_answer',
+        sdp: answer,
+        from: getClientName()
+      });
+    } else if (msg.type === 'signal_answer') {
+      console.log('[P2P Signal] Received Answer from', msg.from);
+      if (p2pConnection && p2pConnection.signalingState !== 'stable') {
+        await p2pConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      }
+    } else if (msg.type === 'signal_ice') {
+      if (p2pConnection && p2pConnection.remoteDescription) {
+        try {
+          await p2pConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+        } catch (err) {
+          console.warn('[P2P] ICE candidate addition error:', err);
+        }
+      }
+    }
+  };
+}
+
+/**
+ * 1-Click Fast Pair Trigger (Tab A Initiator)
+ */
+async function startFastPair() {
+  try {
+    updateP2PUI('connecting', 'P2P: Đang phát tín hiệu...', 'Đang gửi broadcast tìm peer trên trình duyệt...');
+
+    if (p2pConnection) {
+      try { p2pConnection.close(); } catch {}
+    }
+
+    p2pConnection = new RTCPeerConnection(RTC_CONFIG);
+    p2pChannel = p2pConnection.createDataChannel('taskflow-p2p', { ordered: true });
+    setupDataChannel(p2pChannel);
+
+    p2pConnection.onicecandidate = (ev) => {
+      if (ev.candidate && p2pSignalingChannel) {
+        p2pSignalingChannel.postMessage({
+          type: 'signal_ice',
+          candidate: ev.candidate,
+          from: getClientName()
+        });
+      }
+    };
+
+    const offer = await p2pConnection.createOffer();
+    await p2pConnection.setLocalDescription(offer);
+
+    p2pSignalingChannel.postMessage({
+      type: 'signal_offer',
+      sdp: offer,
+      from: getClientName()
+    });
+
+    if (p2pStatusDetails) {
+      p2pStatusDetails.textContent = 'Đã phát Offer! Mở Tab thứ hai hoặc bấm ghép nối để liên kết.';
+    }
+  } catch (err) {
+    console.error('Fast pair error:', err);
+    updateP2PUI('disconnected', 'P2P: Thất bại', 'Lỗi khi khởi tạo Fast Pair: ' + err.message);
+  }
+}
+
+/**
+ * Disconnect active P2P connection
+ */
+function disconnectP2P() {
+  if (p2pChannel) {
+    try { p2pChannel.close(); } catch {}
+    p2pChannel = null;
+  }
+  if (p2pConnection) {
+    try { p2pConnection.close(); } catch {}
+    p2pConnection = null;
+  }
+  updateP2PUI('disconnected', 'P2P: Chưa kết nối', 'Đã ngắt kết nối P2P.');
+  showToast('Đã ngắt kết nối P2P.', 'info');
+}
+
+// =============================================================================
+// Manual SDP Token Exchange (For independent machines on LAN without server)
+// =============================================================================
+
+function encodeToken(obj) {
+  return btoa(encodeURIComponent(JSON.stringify(obj)));
+}
+
+function decodeToken(str) {
+  return JSON.parse(decodeURIComponent(atob(str.trim())));
+}
+
+async function generateManualOffer() {
+  try {
+    btnGenerateOffer.disabled = true;
+    btnGenerateOffer.textContent = 'Đang thu thập ICE...';
+
+    if (p2pConnection) {
+      try { p2pConnection.close(); } catch {}
+    }
+
+    p2pConnection = new RTCPeerConnection(RTC_CONFIG);
+    p2pChannel = p2pConnection.createDataChannel('taskflow-p2p', { ordered: true });
+    setupDataChannel(p2pChannel);
+
+    const offer = await p2pConnection.createOffer();
+    await p2pConnection.setLocalDescription(offer);
+
+    // Wait for ICE gathering to complete or timeout after 1.2s
+    await new Promise(resolve => {
+      if (p2pConnection.iceGatheringState === 'complete') resolve();
+      const check = () => {
+        if (p2pConnection.iceGatheringState === 'complete') {
+          p2pConnection.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      };
+      p2pConnection.addEventListener('icegatheringstatechange', check);
+      setTimeout(resolve, 1200);
+    });
+
+    const token = encodeToken(p2pConnection.localDescription);
+    offerSdpOutput.value = token;
+    btnCopyOffer.disabled = false;
+    btnGenerateOffer.textContent = 'Đã tạo mã Offer ✓';
+    showToast('Đã tạo mã Offer! Hãy sao chép sang Máy B.', 'info');
+  } catch (err) {
+    console.error('Manual offer error:', err);
+    showToast('Lỗi tạo Offer: ' + err.message, 'error');
+    btnGenerateOffer.textContent = 'Tạo lại mã (Offer)';
+  } finally {
+    btnGenerateOffer.disabled = false;
+  }
+}
+
+async function acceptManualOfferAndGenerateAnswer() {
+  const token = offerSdpInput.value.trim();
+  if (!token) {
+    showToast('Vui lòng dán mã Offer từ Máy A trước!', 'error');
+    return;
+  }
+
+  try {
+    btnGenerateAnswer.disabled = true;
+    btnGenerateAnswer.textContent = 'Đang thu thập ICE...';
+
+    const desc = decodeToken(token);
+    if (p2pConnection) {
+      try { p2pConnection.close(); } catch {}
+    }
+
+    p2pConnection = new RTCPeerConnection(RTC_CONFIG);
+    p2pConnection.ondatachannel = (e) => {
+      p2pChannel = e.channel;
+      setupDataChannel(p2pChannel);
+    };
+
+    await p2pConnection.setRemoteDescription(desc);
+    const answer = await p2pConnection.createAnswer();
+    await p2pConnection.setLocalDescription(answer);
+
+    await new Promise(resolve => {
+      if (p2pConnection.iceGatheringState === 'complete') resolve();
+      const check = () => {
+        if (p2pConnection.iceGatheringState === 'complete') {
+          p2pConnection.removeEventListener('icegatheringstatechange', check);
+          resolve();
+        }
+      };
+      p2pConnection.addEventListener('icegatheringstatechange', check);
+      setTimeout(resolve, 1200);
+    });
+
+    const answerToken = encodeToken(p2pConnection.localDescription);
+    answerSdpOutput.value = answerToken;
+    btnCopyAnswer.disabled = false;
+    btnGenerateAnswer.textContent = 'Đã tạo mã Answer ✓';
+    showToast('Đã tạo mã Answer! Hãy sao chép dán lại vào Máy A.', 'info');
+  } catch (err) {
+    console.error('Manual answer error:', err);
+    showToast('Lỗi tạo Answer: ' + err.message, 'error');
+    btnGenerateAnswer.textContent = 'Tạo lại mã (Answer)';
+  } finally {
+    btnGenerateAnswer.disabled = false;
+  }
+}
+
+async function acceptManualAnswer() {
+  const token = answerSdpInput.value.trim();
+  if (!token) {
+    showToast('Vui lòng dán mã Answer từ Máy B!', 'error');
+    return;
+  }
+
+  try {
+    const desc = decodeToken(token);
+    if (!p2pConnection) throw new Error('Chưa khởi tạo Peer A!');
+    await p2pConnection.setRemoteDescription(desc);
+    showToast('Đang kết nối WebRTC DataChannel...', 'info');
+  } catch (err) {
+    console.error('Accept answer error:', err);
+    showToast('Lỗi chấp nhận Answer: ' + err.message, 'error');
+  }
+}
+
+function setupP2PModal() {
+  if (btnOpenP2pModal && p2pModal) {
+    btnOpenP2pModal.addEventListener('click', () => { p2pModal.style.display = 'flex'; });
+  }
+  if (btnCloseP2pModal && p2pModal) {
+    btnCloseP2pModal.addEventListener('click', () => { p2pModal.style.display = 'none'; });
+    p2pModal.addEventListener('click', (e) => {
+      if (e.target === p2pModal) p2pModal.style.display = 'none';
+    });
+  }
+
+  // Tabs
+  if (tabBtnFast && tabBtnManual && paneFast && paneManual) {
+    tabBtnFast.addEventListener('click', () => {
+      tabBtnFast.classList.add('active');
+      tabBtnManual.classList.remove('active');
+      paneFast.style.display = 'block';
+      paneManual.style.display = 'none';
+    });
+
+    tabBtnManual.addEventListener('click', () => {
+      tabBtnManual.classList.add('active');
+      tabBtnFast.classList.remove('active');
+      paneManual.style.display = 'block';
+      paneFast.style.display = 'none';
+    });
+  }
+
+  // Fast pair action
+  if (btnFastPair) btnFastPair.addEventListener('click', startFastPair);
+  if (btnP2pDisconnect) btnP2pDisconnect.addEventListener('click', disconnectP2P);
+
+  // Manual actions
+  if (btnGenerateOffer) btnGenerateOffer.addEventListener('click', generateManualOffer);
+  if (btnCopyOffer) {
+    btnCopyOffer.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(offerSdpOutput.value);
+      showToast('Đã sao chép mã Offer!', 'success');
+    });
+  }
+  if (btnGenerateAnswer) btnGenerateAnswer.addEventListener('click', acceptManualOfferAndGenerateAnswer);
+  if (btnCopyAnswer) {
+    btnCopyAnswer.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(answerSdpOutput.value);
+      showToast('Đã sao chép mã Answer!', 'success');
+    });
+  }
+  if (btnAcceptAnswer) btnAcceptAnswer.addEventListener('click', acceptManualAnswer);
+}
+
+// =============================================================================
+// CRUD Operations (Seamless Server & P2P Offline-First Routing)
 // =============================================================================
 
 async function loadTasks(silent = false) {
@@ -198,7 +705,7 @@ async function loadTasks(silent = false) {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
 
     const newTasks = await res.json();
-    setServerStatus(true, 'SSE Real-time + SQLite3');
+    setServerStatus(true, 'SQLite Backend :8080 (Online)');
 
     if (!areTasksEqual(tasks, newTasks)) {
       const isRemoteChange = !isInitialLoad && tasks.length > 0;
@@ -217,9 +724,11 @@ async function loadTasks(silent = false) {
 
     isInitialLoad = false;
   } catch (err) {
-    console.error('Lỗi nạp tasks:', err);
-    setServerStatus(false, 'Không thể kết nối C server');
-    if (!silent) showToast('Lỗi khi tải dữ liệu từ C SQLite backend!', 'error');
+    console.warn('Lỗi nạp tasks từ server:', err.message);
+    setServerStatus(false, 'Mất kết nối server');
+    if (!silent && !p2pChannel) {
+      showToast('Không thể kết nối C backend. Sử dụng dữ liệu cục bộ / P2P.', 'info');
+    }
   } finally {
     isPolling = false;
     if (loadingState) loadingState.style.display = 'none';
@@ -235,25 +744,70 @@ async function handleAddTask(e) {
   submitBtn.disabled = true;
 
   try {
-    const res = await fetch(API_BASE, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body:    JSON.stringify({ title })
-    });
+    let newTask = null;
+    let savedViaServer = false;
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || `HTTP ${res.status}`);
+    // 1. Try persisting via central server if online
+    if (isServerOnline) {
+      try {
+        const res = await fetch(API_BASE, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+          body:    JSON.stringify({ title })
+        });
+        if (res.ok) {
+          newTask = await res.json();
+          savedViaServer = true;
+        }
+      } catch (netErr) {
+        console.warn('Backend unreachable — falling back to P2P/Offline creation:', netErr.message);
+        setServerStatus(false, 'Mất kết nối server');
+      }
     }
 
-    const newTask = await res.json();
-    // Optimistic local insert — SSE will also arrive and be deduplicated
+    // 2. If server failed or offline, generate local offline/P2P task
+    if (!newTask) {
+      lamportClock++;
+      newTask = {
+        id: Date.now(),
+        title: title,
+        completed: false,
+        created_at: Math.floor(Date.now() / 1000),
+        lamport_ts: lamportClock,
+        peer_id: getClientName(),
+        is_p2p: true
+      };
+    } else {
+      lamportClock++;
+      newTask.lamport_ts = lamportClock;
+      newTask.peer_id = getClientName();
+    }
+
+    // 3. Optimistic local insert & DOM render
     if (!tasks.find(t => t.id === newTask.id)) {
       tasks.unshift(newTask);
       renderKanban();
     }
+
+    // 4. Send directly to peer via WebRTC DataChannel if connected
+    if (p2pChannel && p2pChannel.readyState === 'open') {
+      p2pChannel.send(JSON.stringify({
+        type: 'task_created',
+        data: newTask,
+        lamport_ts: lamportClock,
+        peer_id: getClientName()
+      }));
+    }
+
     taskInput.value = '';
-    showToast(`Đã thêm task: "${newTask.title}"`, 'success');
+
+    if (savedViaServer) {
+      showToast(`Đã thêm task: "${newTask.title}"`, 'success');
+    } else if (p2pChannel && p2pChannel.readyState === 'open') {
+      showToast(`📡 [P2P] Đã tạo task và gửi trực tiếp cho Peer: "${newTask.title}"`, 'success');
+    } else {
+      showToast(`💾 [Offline] Đã tạo task cục bộ: "${newTask.title}"`, 'info');
+    }
   } catch (err) {
     console.error('Lỗi tạo task:', err);
     showToast(`Không thể thêm task: ${err.message}`, 'error');
@@ -267,57 +821,95 @@ async function updateTaskStatus(id, newStatus) {
   const task = tasks.find(t => t.id === id);
   if (!task || task.completed === newStatus) return;
 
-  const previousStatus = task.completed;
-  task.completed = newStatus;
+  // Advance Lamport Clock for mutation
+  lamportClock++;
+  task.completed  = newStatus;
+  task.lamport_ts = lamportClock;
+  task.peer_id    = getClientName();
   renderKanban();
 
-  try {
-    const res = await fetch(`${API_BASE}/${id}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-      body:    JSON.stringify({ completed: newStatus })
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    showToast(newStatus
-      ? `Đã chuyển task #${id} sang Hoàn thành!`
-      : `Đã chuyển task #${id} sang Chưa hoàn thành!`, 'info');
-  } catch (err) {
-    console.error('Lỗi cập nhật task:', err);
-    task.completed = previousStatus;
-    renderKanban();
-    showToast('Không thể cập nhật trạng thái!', 'error');
+  let savedViaServer = false;
+  if (isServerOnline) {
+    try {
+      const res = await fetch(`${API_BASE}/${id}`, {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+        body:    JSON.stringify({ completed: newStatus })
+      });
+      if (res.ok) savedViaServer = true;
+    } catch (netErr) {
+      console.warn('Backend unreachable during update, broadcasting via P2P:', netErr.message);
+      setServerStatus(false, 'Mất kết nối server');
+    }
+  }
+
+  // Send update via P2P DataChannel
+  if (p2pChannel && p2pChannel.readyState === 'open') {
+    p2pChannel.send(JSON.stringify({
+      type: 'task_updated',
+      data: { id: task.id, completed: newStatus, title: task.title },
+      lamport_ts: lamportClock,
+      peer_id: getClientName()
+    }));
+  }
+
+  const statusLabel = newStatus ? 'Hoàn thành' : 'Chưa hoàn thành';
+  if (savedViaServer) {
+    showToast(`Đã chuyển task #${id} sang ${statusLabel}!`, 'info');
+  } else if (p2pChannel && p2pChannel.readyState === 'open') {
+    showToast(`📡 [P2P] Đã đổi trạng thái task #${id} và gửi trực tiếp cho Peer!`, 'info');
+  } else {
+    showToast(`💾 [Offline] Đã chuyển task #${id} sang ${statusLabel}!`, 'info');
   }
 }
 
 async function deleteTask(id) {
   const task      = tasks.find(t => t.id === id);
   const taskTitle = task ? task.title : `#${id}`;
-  try {
-    const res = await fetch(`${API_BASE}/${id}`, {
-      method:  'DELETE',
-      headers: { 'ngrok-skip-browser-warning': 'true' }
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    tasks = tasks.filter(t => t.id !== id);
-    renderKanban();
+  tasks = tasks.filter(t => t.id !== id);
+  lamportClock++;
+  renderKanban();
+
+  let savedViaServer = false;
+  if (isServerOnline) {
+    try {
+      const res = await fetch(`${API_BASE}/${id}`, {
+        method:  'DELETE',
+        headers: { 'ngrok-skip-browser-warning': 'true' }
+      });
+      if (res.ok) savedViaServer = true;
+    } catch (netErr) {
+      console.warn('Backend unreachable during delete, broadcasting via P2P:', netErr.message);
+      setServerStatus(false, 'Mất kết nối server');
+    }
+  }
+
+  // Send delete event via P2P DataChannel
+  if (p2pChannel && p2pChannel.readyState === 'open') {
+    p2pChannel.send(JSON.stringify({
+      type: 'task_deleted',
+      data: { deleted_id: id },
+      lamport_ts: lamportClock,
+      peer_id: getClientName()
+    }));
+  }
+
+  if (savedViaServer) {
     showToast(`Đã xóa task: "${taskTitle}"`, 'info');
-  } catch (err) {
-    console.error('Lỗi xóa task:', err);
-    showToast('Không thể xóa task!', 'error');
+  } else if (p2pChannel && p2pChannel.readyState === 'open') {
+    showToast(`📡 [P2P] Đã xóa task và thông báo cho Peer!`, 'info');
+  } else {
+    showToast(`💾 [Offline] Đã xóa task: "${taskTitle}"`, 'info');
   }
 }
 
 // =============================================================================
-// V3.5: SSE Real-time connection
+// SSE Real-time connection (Unchanged from V3.5)
 // =============================================================================
 
-let eventSource      = null;
-let fallbackPollingId= null;
-
-function getClientName() {
-  return sessionStorage.getItem('taskflow_client_name') || 'Unknown';
-}
+let eventSource       = null;
+let fallbackPollingId = null;
 
 function connectSSE() {
   if (eventSource) {
@@ -330,10 +922,8 @@ function connectSSE() {
 
   eventSource = new EventSource(url);
 
-  /* ── task_created ──────────────────────────────────────────────── */
   eventSource.addEventListener('task_created', (e) => {
     const task = JSON.parse(e.data);
-    // Deduplicate: may already be in local state from optimistic insert
     if (!tasks.find(t => t.id === task.id)) {
       tasks.unshift(task);
       renderKanban();
@@ -342,7 +932,6 @@ function connectSSE() {
     updateSyncBadge();
   });
 
-  /* ── task_updated ──────────────────────────────────────────────── */
   eventSource.addEventListener('task_updated', (e) => {
     const updated = JSON.parse(e.data);
     const idx = tasks.findIndex(t => t.id === updated.id);
@@ -353,7 +942,6 @@ function connectSSE() {
     updateSyncBadge();
   });
 
-  /* ── task_deleted ──────────────────────────────────────────────── */
   eventSource.addEventListener('task_deleted', (e) => {
     const { deleted_id } = JSON.parse(e.data);
     const before = tasks.length;
@@ -365,29 +953,23 @@ function connectSSE() {
     updateSyncBadge();
   });
 
-  /* ── client_joined ─────────────────────────────────────────────── */
   eventSource.addEventListener('client_joined', (e) => {
     const data = JSON.parse(e.data);
     updateOnlineUsers(data);
-    // Only show toast if it's a different client joining
     if (data.client_name !== getClientName()) {
       showToast(`👋 ${data.client_name} đã tham gia`, 'info');
     }
   });
 
-  /* ── client_left ───────────────────────────────────────────────── */
   eventSource.addEventListener('client_left', (e) => {
     const data = JSON.parse(e.data);
     updateOnlineUsers(data);
     showToast(`👋 ${data.client_name} đã rời phòng`, 'info');
   });
 
-  /* ── connection lifecycle ───────────────────────────────────────── */
   eventSource.onopen = () => {
-    setServerStatus(true, 'SSE Real-time Connected ✓');
+    setServerStatus(true, 'SQLite Backend :8080 (SSE Connected ✓)');
     console.log('[SSE] Connected to /api/events');
-
-    // Stop fallback polling if SSE is back
     if (fallbackPollingId) {
       clearInterval(fallbackPollingId);
       fallbackPollingId = null;
@@ -395,20 +977,18 @@ function connectSSE() {
   };
 
   eventSource.onerror = () => {
-    setServerStatus(false, 'SSE mất kết nối, đang thử lại...');
-    console.warn('[SSE] Connection error — falling back to polling');
+    setServerStatus(false, 'Mất kết nối server');
+    console.warn('[SSE] Connection error — server may be down');
 
     if (eventSource) {
       eventSource.close();
       eventSource = null;
     }
 
-    // Activate fallback polling while SSE is down
     if (!fallbackPollingId) {
       fallbackPollingId = setInterval(() => loadTasks(true), POLL_INTERVAL_MS);
     }
 
-    // Auto-reconnect SSE after 5 s
     setTimeout(connectSSE, 5000);
   };
 }
@@ -427,7 +1007,7 @@ function updateSyncBadge() {
 }
 
 // =============================================================================
-// Kanban rendering (unchanged from V3)
+// Kanban Rendering
 // =============================================================================
 
 function updateStats() {
@@ -436,17 +1016,17 @@ function updateStats() {
   const pending   = total - completed;
   const pct       = total === 0 ? 0 : Math.round((completed / total) * 100);
 
-  statTotal.textContent     = total;
-  statPending.textContent   = pending;
-  statCompleted.textContent = completed;
-  statPercent.textContent   = `${pct}%`;
-  progressBar.style.width   = `${pct}%`;
+  statTotal.textContent      = total;
+  statPending.textContent    = pending;
+  statCompleted.textContent  = completed;
+  statPercent.textContent    = `${pct}%`;
+  progressBar.style.width    = `${pct}%`;
 
-  badgePendingCount.textContent  = pending;
-  badgeCompletedCount.textContent= completed;
+  badgePendingCount.textContent   = pending;
+  badgeCompletedCount.textContent = completed;
 
-  emptyHintPending.style.display  = pending   === 0 ? 'block' : 'none';
-  emptyHintCompleted.style.display= completed === 0 ? 'block' : 'none';
+  emptyHintPending.style.display   = pending   === 0 ? 'block' : 'none';
+  emptyHintCompleted.style.display = completed === 0 ? 'block' : 'none';
 }
 
 function renderKanban() {
@@ -464,10 +1044,12 @@ function createKanbanCard(task, isCompleted) {
   card.id        = `kanban-card-${task.id}`;
   card.draggable = true;
 
+  const isP2P = Boolean(task.is_p2p);
+
   card.innerHTML = `
     <div class="kanban-card-header">
       <div class="kanban-card-meta">
-        <span class="task-id-badge">#${task.id}</span>
+        <span class="task-id-badge ${isP2P ? 'p2p' : ''}">#${task.id}${isP2P ? ' (P2P)' : ''}</span>
         <span>${task.created_at ? formatTime(task.created_at) : 'Vừa xong'}</span>
       </div>
       <button type="button" class="btn-delete" id="task-delete-${task.id}"
@@ -537,15 +1119,15 @@ function setupDropzones() {
     zone.addEventListener('drop', (e) => {
       e.preventDefault();
       zone.classList.remove('drag-over');
-      const taskId      = parseInt(e.dataTransfer.getData('text/plain'), 10);
-      const targetStatus= zone.dataset.targetStatus === 'true';
+      const taskId       = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      const targetStatus = zone.dataset.targetStatus === 'true';
       if (taskId > 0) updateTaskStatus(taskId, targetStatus);
     });
   });
 }
 
 // =============================================================================
-// Event listeners & init
+// Event Listeners & Startup Initialization
 // =============================================================================
 
 taskForm.addEventListener('submit', handleAddTask);
@@ -557,10 +1139,8 @@ refreshBtn.addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
   initClientIdentity();
   setupDropzones();
-  loadTasks(true);       // Initial full fetch
-
-  // V3.5: Start SSE real-time connection
+  setupP2PModal();
+  initP2PSignaling();
+  loadTasks(true);
   connectSSE();
-  // NOTE: No setInterval polling here — SSE handles real-time;
-  // fallback polling starts automatically in eventSource.onerror
 });

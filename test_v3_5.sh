@@ -61,8 +61,8 @@ echo ""
 echo "[3/6] Kiểm tra API cơ bản (V3 backward compatibility)..."
 
 INFO=$(curl -sf "$BASE_URL/api/info")
-if echo "$INFO" | grep -q '"version":"V3.5"'; then
-    pass "/api/info trả về version V3.5"
+if echo "$INFO" | grep -q -E '"version":"(V3\.5|V4)"'; then
+    pass "/api/info trả về version V3.5 hoặc V4 (Backward Compatible)"
 else
     fail "/api/info không chứa V3.5 — nhận được: $INFO"
 fi

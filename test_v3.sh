@@ -69,7 +69,7 @@ trap cleanup EXIT
 echo "[3/9] Checking /api/info for N-Layer and SQLite architecture..."
 INFO_RESP=$(curl -s -f "$URL/api/info")
 echo "  -> API Info: $INFO_RESP"
-echo "$INFO_RESP" | grep -q -E '"version":"(V3|V3\.5)"' || { echo "FAILED: Version is not V3 or V3.5!"; exit 1; }
+echo "$INFO_RESP" | grep -q -E '"version":"(V3|V3\.5|V4)"' || { echo "FAILED: Version is not V3, V3.5, or V4!"; exit 1; }
 echo "$INFO_RESP" | grep -q 'SQLite' || { echo "FAILED: Storage engine is not SQLite!"; exit 1; }
 echo "$INFO_RESP" | grep -q 'Kanban' || { echo "FAILED: UI style is not Kanban!"; exit 1; }
 echo "  [PASS] API Info confirms N-Layer, SQLite storage, and Kanban UI."
