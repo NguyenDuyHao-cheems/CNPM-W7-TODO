@@ -1,27 +1,34 @@
 /**
- * TaskFlow - Version 2 (Client–Server Multi-Device Collaboration)
+ * TaskFlow - Version 3 (Kanban Board UI + N-Layer SQLite Backend)
  * CNPM Tuần 7: Tiến hóa kiến trúc ứng dụng quản lý công việc
  */
 
 const API_BASE = '/api/tasks';
-const POLL_INTERVAL_MS = 2500; // Poll server every 2.5 seconds
+const POLL_INTERVAL_MS = 2500;
 
 // Application State
 let tasks = [];
-let currentFilter = 'all';
 let isInitialLoad = true;
 let isPolling = false;
 
 // DOM Elements
 const taskForm = document.getElementById('task-form');
 const taskInput = document.getElementById('task-title-input');
-const taskList = document.getElementById('task-list');
 const loadingState = document.getElementById('loading-state');
-const emptyState = document.getElementById('empty-state');
 const refreshBtn = document.getElementById('refresh-btn');
 const toastContainer = document.getElementById('toast-container');
 
-// Multi-Client / Network Elements (V2)
+// Kanban Elements
+const listPending = document.getElementById('list-pending');
+const listCompleted = document.getElementById('list-completed');
+const dropzonePending = document.getElementById('dropzone-pending');
+const dropzoneCompleted = document.getElementById('dropzone-completed');
+const badgePendingCount = document.getElementById('badge-pending-count');
+const badgeCompletedCount = document.getElementById('badge-completed-count');
+const emptyHintPending = document.getElementById('empty-hint-pending');
+const emptyHintCompleted = document.getElementById('empty-hint-completed');
+
+// Multi-Client / Network Elements
 const clientNameEl = document.getElementById('client-name');
 const renameClientBtn = document.getElementById('rename-client-btn');
 const syncDot = document.getElementById('sync-dot');
@@ -36,18 +43,11 @@ const statCompleted = document.getElementById('stat-completed');
 const statPercent = document.getElementById('stat-percent');
 const progressBar = document.getElementById('progress-bar');
 
-const countAll = document.getElementById('count-all');
-const countActive = document.getElementById('count-active');
-const countCompleted = document.getElementById('count-completed');
-
 // Status Elements
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 
-// Filter tabs
-const filterTabs = document.querySelectorAll('.filter-tab');
-
-// --- Helper: Setup Client Identity (V2) ---
+// --- Helper: Setup Client Identity ---
 function initClientIdentity() {
   let clientName = sessionStorage.getItem('taskflow_client_name');
   if (!clientName) {
@@ -61,14 +61,11 @@ function initClientIdentity() {
     clientNameEl.textContent = clientName;
   }
 
-  // Setup Share URL
   if (shareUrlText) {
-    const currentOrigin = window.location.origin;
-    shareUrlText.textContent = currentOrigin;
+    shareUrlText.textContent = window.location.origin;
   }
 }
 
-// Rename Client
 if (renameClientBtn) {
   renameClientBtn.addEventListener('click', () => {
     const current = sessionStorage.getItem('taskflow_client_name') || 'Thiết bị';
@@ -81,12 +78,11 @@ if (renameClientBtn) {
   });
 }
 
-// Copy Share URL
 if (copyShareUrlBtn) {
   copyShareUrlBtn.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(window.location.origin);
-      showToast('Đã sao chép link truy cập vào clipboard! Mở trên thiết bị khác để thử nghiệm.', 'success');
+      showToast('Đã sao chép link truy cập vào clipboard!', 'success');
     } catch {
       showToast('Link: ' + window.location.origin, 'info');
     }
@@ -117,7 +113,7 @@ function showToast(message, type = 'info') {
 function setServerStatus(online, details = '') {
   if (online) {
     statusIndicator.className = 'pulse-indicator connected';
-    statusText.textContent = details || 'Hoạt động (C Server :8080)';
+    statusText.textContent = details || 'SQLite Backend :8080';
   } else {
     statusIndicator.className = 'pulse-indicator error';
     statusText.textContent = details || 'Mất kết nối server';
@@ -146,7 +142,7 @@ function areTasksEqual(a, b) {
   return true;
 }
 
-// Fetch all tasks from C Backend
+// Fetch all tasks from SQLite Backend
 async function loadTasks(silent = false) {
   if (isPolling) return;
   isPolling = true;
@@ -162,16 +158,15 @@ async function loadTasks(silent = false) {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     
     const newTasks = await res.json();
-    setServerStatus(true, 'Kết nối: 0.0.0.0:8080');
+    setServerStatus(true, 'SQLite3: tasks.db');
 
-    // Detect remote changes from other clients
     if (!areTasksEqual(tasks, newTasks)) {
       const isRemoteChange = !isInitialLoad && tasks.length > 0;
       tasks = newTasks;
-      render();
+      renderKanban();
 
       if (isRemoteChange && !silent) {
-        showToast('🔄 Đã tự động đồng bộ dữ liệu mới nhất từ server!', 'info');
+        showToast('🔄 Đã đồng bộ bảng Kanban mới nhất từ server!', 'info');
       }
     }
 
@@ -188,7 +183,7 @@ async function loadTasks(silent = false) {
     console.error('Lỗi nạp tasks:', err);
     setServerStatus(false, 'Không thể kết nối C server');
     if (!silent) {
-      showToast('Lỗi khi tải dữ liệu từ C backend!', 'error');
+      showToast('Lỗi khi tải dữ liệu từ C SQLite backend!', 'error');
     }
   } finally {
     isPolling = false;
@@ -223,8 +218,8 @@ async function handleAddTask(e) {
     const newTask = await res.json();
     tasks.unshift(newTask);
     taskInput.value = '';
-    render();
-    showToast(`Đã thêm task: "${newTask.title}" lên server`, 'success');
+    renderKanban();
+    showToast(`Đã thêm task: "${newTask.title}" vào SQLite`, 'success');
   } catch (err) {
     console.error('Lỗi tạo task:', err);
     showToast(`Không thể thêm task: ${err.message}`, 'error');
@@ -234,16 +229,15 @@ async function handleAddTask(e) {
   }
 }
 
-// Toggle completed status
-async function toggleTask(id) {
+// Update task completion status
+async function updateTaskStatus(id, newStatus) {
   const task = tasks.find(t => t.id === id);
-  if (!task) return;
-
-  const newStatus = !task.completed;
+  if (!task || task.completed === newStatus) return;
 
   // Optimistic update
+  const previousStatus = task.completed;
   task.completed = newStatus;
-  render();
+  renderKanban();
 
   try {
     const res = await fetch(`${API_BASE}/${id}`, {
@@ -257,12 +251,11 @@ async function toggleTask(id) {
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    showToast(newStatus ? `Đã hoàn thành task #${id}!` : `Đã mở lại task #${id}!`, 'info');
+    showToast(newStatus ? `Đã chuyển task #${id} sang Hoàn thành!` : `Đã chuyển task #${id} sang Chưa hoàn thành!`, 'info');
   } catch (err) {
     console.error('Lỗi cập nhật task:', err);
-    // Revert
-    task.completed = !newStatus;
-    render();
+    task.completed = previousStatus;
+    renderKanban();
     showToast('Không thể cập nhật trạng thái!', 'error');
   }
 }
@@ -283,8 +276,8 @@ async function deleteTask(id) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     tasks = tasks.filter(t => t.id !== id);
-    render();
-    showToast(`Đã xóa task: "${taskTitle}" khỏi server`, 'info');
+    renderKanban();
+    showToast(`Đã xóa task: "${taskTitle}" khỏi SQLite database`, 'info');
   } catch (err) {
     console.error('Lỗi xóa task:', err);
     showToast('Không thể xóa task!', 'error');
@@ -295,103 +288,152 @@ async function deleteTask(id) {
 function updateStats() {
   const total = tasks.length;
   const completed = tasks.filter(t => t.completed).length;
-  const active = total - completed;
+  const pending = total - completed;
   const pct = total === 0 ? 0 : Math.round((completed / total) * 100);
 
   statTotal.textContent = total;
-  statPending.textContent = active;
+  statPending.textContent = pending;
   statCompleted.textContent = completed;
   statPercent.textContent = `${pct}%`;
   progressBar.style.width = `${pct}%`;
 
-  countAll.textContent = total;
-  countActive.textContent = active;
-  countCompleted.textContent = completed;
+  badgePendingCount.textContent = pending;
+  badgeCompletedCount.textContent = completed;
+
+  emptyHintPending.style.display = pending === 0 ? 'block' : 'none';
+  emptyHintCompleted.style.display = completed === 0 ? 'block' : 'none';
 }
 
-// Render task list based on current filter
-function render() {
+// Render Kanban Board (2 Columns: Pending & Completed)
+function renderKanban() {
   updateStats();
 
-  const filteredTasks = tasks.filter(task => {
-    if (currentFilter === 'active') return !task.completed;
-    if (currentFilter === 'completed') return task.completed;
-    return true;
+  listPending.innerHTML = '';
+  listCompleted.innerHTML = '';
+
+  const pendingTasks = tasks.filter(t => !t.completed);
+  const completedTasks = tasks.filter(t => t.completed);
+
+  pendingTasks.forEach(task => {
+    listPending.appendChild(createKanbanCard(task, false));
   });
 
-  taskList.innerHTML = '';
+  completedTasks.forEach(task => {
+    listCompleted.appendChild(createKanbanCard(task, true));
+  });
+}
 
-  if (tasks.length === 0) {
-    emptyState.style.display = 'flex';
-    emptyState.querySelector('h3').textContent = 'Chưa có công việc nào';
-    emptyState.querySelector('p').innerHTML = 'Hãy nhập tên công việc ở trên và bấm "Thêm công việc" để lưu vào <code>tasks.json</code>.';
-    return;
-  }
+// Create Kanban Card Element with Drag & Drop + Action Buttons
+function createKanbanCard(task, isCompleted) {
+  const card = document.createElement('li');
+  card.className = `kanban-card ${isCompleted ? 'completed' : ''}`;
+  card.id = `kanban-card-${task.id}`;
+  card.draggable = true;
 
-  if (filteredTasks.length === 0) {
-    emptyState.style.display = 'flex';
-    emptyState.querySelector('h3').textContent = 'Không có kết quả lọc';
-    emptyState.querySelector('p').textContent = 'Không có công việc nào trong danh mục này.';
-    return;
-  }
-
-  emptyState.style.display = 'none';
-
-  filteredTasks.forEach(task => {
-    const li = document.createElement('li');
-    li.className = `task-item ${task.completed ? 'completed' : ''}`;
-    li.id = `task-item-${task.id}`;
-
-    li.innerHTML = `
-      <div class="task-left">
-        <button 
-          type="button" 
-          class="task-checkbox-btn" 
-          id="task-toggle-${task.id}" 
-          title="${task.completed ? 'Đánh dấu chưa hoàn thành' : 'Đánh dấu hoàn thành'}"
-          aria-label="Đổi trạng thái task ${task.id}"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-        </button>
-        <div class="task-details">
-          <span class="task-title" id="task-title-${task.id}">${escapeHtml(task.title)}</span>
-          <div class="task-meta-row">
-            <span class="task-id-badge">ID #${task.id}</span>
-            <span>${task.created_at ? formatTime(task.created_at) : 'Vừa xong'}</span>
-          </div>
-        </div>
+  card.innerHTML = `
+    <div class="kanban-card-header">
+      <div class="kanban-card-meta">
+        <span class="task-id-badge">#${task.id}</span>
+        <span>${task.created_at ? formatTime(task.created_at) : 'Vừa xong'}</span>
       </div>
-      <div class="task-right">
-        <span class="status-pill ${task.completed ? 'done' : 'pending'}">
-          ${task.completed ? 'Hoàn thành' : 'Chờ làm'}
-        </span>
-        <button 
-          type="button" 
-          class="btn-delete" 
-          id="task-delete-${task.id}" 
-          title="Xóa công việc"
-          aria-label="Xóa task ${task.id}"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            <line x1="10" y1="11" x2="10" y2="17"></line>
-            <line x1="14" y1="11" x2="14" y2="17"></line>
+      <button 
+        type="button" 
+        class="btn-delete" 
+        id="task-delete-${task.id}" 
+        title="Xóa công việc khỏi SQLite"
+        aria-label="Xóa task ${task.id}"
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          <line x1="10" y1="11" x2="10" y2="17"></line>
+          <line x1="14" y1="11" x2="14" y2="17"></line>
+        </svg>
+      </button>
+    </div>
+
+    <div class="kanban-card-body" id="task-title-${task.id}">
+      ${escapeHtml(task.title)}
+    </div>
+
+    <div class="kanban-card-footer">
+      <span class="status-pill ${isCompleted ? 'done' : 'pending'}">
+        ${isCompleted ? 'Đã xong' : 'Chưa xong'}
+      </span>
+      <button 
+        type="button" 
+        class="btn-move-status" 
+        id="task-move-${task.id}" 
+        title="${isCompleted ? 'Chuyển về Chưa hoàn thành' : 'Đánh dấu Hoàn thành'}"
+      >
+        ${isCompleted ? `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
-        </button>
-      </div>
-    `;
+          Làm lại
+        ` : `
+          Hoàn thành
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        `}
+      </button>
+    </div>
+  `;
 
-    // Event listeners
-    const toggleBtn = li.querySelector(`#task-toggle-${task.id}`);
-    toggleBtn.addEventListener('click', () => toggleTask(task.id));
+  // HTML5 Drag and Drop events
+  card.addEventListener('dragstart', (e) => {
+    e.dataTransfer.setData('text/plain', String(task.id));
+    e.dataTransfer.effectAllowed = 'move';
+    card.classList.add('dragging');
+  });
 
-    const deleteBtn = li.querySelector(`#task-delete-${task.id}`);
-    deleteBtn.addEventListener('click', () => deleteTask(task.id));
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging');
+  });
 
-    taskList.appendChild(li);
+  // Action button toggle
+  const moveBtn = card.querySelector(`#task-move-${task.id}`);
+  moveBtn.addEventListener('click', () => {
+    updateTaskStatus(task.id, !isCompleted);
+  });
+
+  // Delete button
+  const deleteBtn = card.querySelector(`#task-delete-${task.id}`);
+  deleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteTask(task.id);
+  });
+
+  return card;
+}
+
+// Setup Dropzones for HTML5 Drag & Drop
+function setupDropzones() {
+  [dropzonePending, dropzoneCompleted].forEach(zone => {
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      zone.classList.add('drag-over');
+    });
+
+    zone.addEventListener('dragleave', (e) => {
+      if (!zone.contains(e.relatedTarget)) {
+        zone.classList.remove('drag-over');
+      }
+    });
+
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+      const taskIdStr = e.dataTransfer.getData('text/plain');
+      const taskId = parseInt(taskIdStr, 10);
+      const targetStatus = zone.dataset.targetStatus === 'true';
+
+      if (taskId > 0) {
+        updateTaskStatus(taskId, targetStatus);
+      }
+    });
   });
 }
 
@@ -404,25 +446,17 @@ function escapeHtml(text) {
 // Event Listeners
 taskForm.addEventListener('submit', handleAddTask);
 refreshBtn.addEventListener('click', () => {
-  showToast('Đang tải lại dữ liệu từ C server...', 'info');
+  showToast('Đang làm mới dữ liệu từ SQLite database...', 'info');
   loadTasks(false);
-});
-
-filterTabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    filterTabs.forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    currentFilter = tab.dataset.filter;
-    render();
-  });
 });
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
   initClientIdentity();
+  setupDropzones();
   loadTasks(true);
 
-  // Version 2: Periodic polling to auto-sync with server and other devices
+  // Auto-sync polling every 2.5 seconds
   setInterval(() => {
     loadTasks(true);
   }, POLL_INTERVAL_MS);

@@ -14,8 +14,8 @@ echo "[1/8] Rebuilding C server..."
 make clean > /dev/null
 make > /dev/null
 
-# Clean old tasks.json for fresh test
-rm -f tasks.json tasks.json.tmp
+# Clean old data for fresh test
+rm -f tasks.json tasks.json.tmp tasks.db tasks.db-wal tasks.db-shm
 
 echo "[2/8] Starting C server on port $PORT..."
 $SERVER_BIN $PORT &
@@ -32,10 +32,10 @@ cleanup() {
 trap cleanup EXIT
 
 # Verify server connectivity and V2 API info
-echo "[3/8] Checking V2 server connectivity and /api/info..."
+echo "[3/8] Checking V2/V3 server connectivity and /api/info..."
 INFO_RESP=$(curl -s -f "$URL/api/info")
 echo "  -> Server Info: $INFO_RESP"
-echo "$INFO_RESP" | grep -q '"version":"V2"' || { echo "FAILED: Server version should be V2!"; exit 1; }
+echo "$INFO_RESP" | grep -q -E '"version":"(V2|V3)"' || { echo "FAILED: Server version should be V2 or V3!"; exit 1; }
 
 # Step 1 in V2 Rubric: Client A creates a task
 echo "[4/8] [Client A (Máy tính)] Tạo task mới..."

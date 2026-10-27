@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TaskFlow | Quản lý công việc - Version 2 (Client–Server)</title>
-  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 2 kiến trúc Client–Server đa thiết bị với C Backend và ngrok.">
+  <title>TaskFlow | Bảng Kanban quản lý công việc - Version 3 (SQLite & N-Layer)</title>
+  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 3 bảng Kanban 2 cột, kiến trúc N-Layer và lưu trữ SQLite database.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -20,15 +20,16 @@
       <div class="brand">
         <div class="brand-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M9 3v18M15 3v18"/>
           </svg>
         </div>
         <div>
           <div class="eyebrow-tag">
             <span class="badge-dot"></span>
-            CNPM Tuần 7 • Kiến trúc Client–Server
+            CNPM Tuần 7 • Kiến trúc N-Layer & Bảng Kanban
           </div>
-          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V2 • Client–Server</span></h1>
+          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V3 • SQLite & Kanban</span></h1>
         </div>
       </div>
 
@@ -40,22 +41,21 @@
             <span class="status-value" id="status-text">Đang kết nối...</span>
           </div>
         </div>
-        <div class="storage-badge">
+        <div class="storage-badge" title="Cơ sở dữ liệu SQLite đã thay thế JSON file">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
+            <ellipse cx="12" cy="5" rx="9" ry="3"/>
+            <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+            <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
           </svg>
-          <code>tasks.json</code>
+          <code>tasks.db (SQLite3)</code>
         </div>
       </div>
     </header>
 
-    <!-- Multi-Client & Network Collaboration Bar (V2 Feature) -->
+    <!-- Multi-Client & Network Collaboration Bar (V2+V3) -->
     <section class="network-bar glass-card">
       <div class="network-left">
-        <div class="client-badge" id="client-badge" title="Mỗi tab/thiết bị có một mã định danh riêng để thử nghiệm đa client">
+        <div class="client-badge" id="client-badge" title="Định danh thiết bị / trình duyệt hiện tại">
           <span class="client-avatar">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
@@ -81,7 +81,7 @@
         <div class="share-box">
           <span class="share-label">Link chia sẻ đa máy:</span>
           <code id="share-url-text">Đang tải URL...</code>
-          <button type="button" class="btn btn-secondary btn-sm" id="copy-share-url-btn" title="Sao chép link để mở trên thiết bị khác hoặc tab ẩn danh">
+          <button type="button" class="btn btn-secondary btn-sm" id="copy-share-url-btn" title="Sao chép link truy cập">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -109,7 +109,7 @@
               type="text" 
               id="task-title-input" 
               class="task-input" 
-              placeholder="Nhập tên công việc mới... (Các thiết bị khác sẽ thấy sau 2.5s)" 
+              placeholder="Nhập tên công việc mới để thêm vào bảng Kanban..." 
               autocomplete="off"
               required
             >
@@ -141,7 +141,7 @@
 
         <div class="stat-card glass-card">
           <div class="stat-meta">
-            <span class="stat-label">Chờ thực hiện</span>
+            <span class="stat-label">Chưa hoàn thành</span>
             <span class="stat-num text-pending" id="stat-pending">0</span>
           </div>
           <div class="stat-icon icon-pending">
@@ -167,7 +167,7 @@
 
         <div class="stat-card glass-card progress-stat-card">
           <div class="stat-meta">
-            <span class="stat-label">Tiến độ hoàn thành</span>
+            <span class="stat-label">Tiến độ bảng Kanban</span>
             <span class="stat-num" id="stat-percent">0%</span>
           </div>
           <div class="progress-bar-container">
@@ -176,64 +176,86 @@
         </div>
       </section>
 
-      <!-- Filter Controls & Header -->
+      <!-- Action & View Controls Bar -->
       <section class="controls-bar glass-card">
-        <div class="filter-tabs" role="tablist">
-          <button class="filter-tab active" data-filter="all" id="filter-all">
-            Tất cả (<span id="count-all">0</span>)
-          </button>
-          <button class="filter-tab" data-filter="active" id="filter-active">
-            Chưa làm (<span id="count-active">0</span>)
-          </button>
-          <button class="filter-tab" data-filter="completed" id="filter-completed">
-            Đã xong (<span id="count-completed">0</span>)
-          </button>
+        <div class="kanban-info-hint">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+          </svg>
+          <span>Mẹo: Bạn có thể <b>kéo thả thẻ</b> hoặc bấm <b>nút mũi tên</b> để chuyển trạng thái giữa 2 cột.</span>
         </div>
 
         <div class="action-buttons">
-          <button class="btn btn-secondary btn-sm" id="refresh-btn" title="Làm mới ngay từ server">
+          <button class="btn btn-secondary btn-sm" id="refresh-btn" title="Làm mới ngay từ SQLite">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10"/>
               <polyline points="1 20 1 14 7 14"/>
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
-            Làm mới ngay
+            Làm mới
           </button>
-          <a class="btn btn-secondary btn-sm" href="/tasks.json" target="_blank" title="Xem trực tiếp file tasks.json trên server">
+          <a class="btn btn-secondary btn-sm" href="/api/info" target="_blank" title="Kiểm tra thông số kiến trúc V3">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-              <polyline points="15 3 21 3 21 9"/>
-              <line x1="10" y1="14" x2="21" y2="3"/>
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="16" x2="12" y2="12"/>
+              <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            Xem tasks.json
+            API Info
           </a>
         </div>
       </section>
 
-      <!-- Task List Container -->
-      <section class="task-list-section">
+      <!-- KANBAN BOARD SECTION (2 COLUMNS) -->
+      <section class="kanban-section">
         <div id="loading-state" class="state-message">
           <div class="spinner"></div>
-          <p>Đang kết nối C backend và đồng bộ dữ liệu...</p>
+          <p>Đang kết nối SQLite database và nạp bảng Kanban...</p>
         </div>
 
-        <div id="empty-state" class="state-message glass-card" style="display: none;">
-          <div class="empty-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M8 12h8"/>
-            </svg>
+        <div class="kanban-board" id="kanban-board">
+          <!-- COLUMN 1: CHƯA HOÀN THÀNH -->
+          <div class="kanban-column column-pending glass-card" id="column-pending" data-status="pending">
+            <div class="column-header">
+              <div class="column-title-group">
+                <span class="column-indicator indicator-pending"></span>
+                <h2 class="column-title">Chưa hoàn thành</h2>
+              </div>
+              <span class="column-badge badge-pending" id="badge-pending-count">0</span>
+            </div>
+
+            <div class="kanban-dropzone" id="dropzone-pending" data-target-status="false">
+              <ul class="kanban-card-list" id="list-pending" aria-label="Danh sách chưa hoàn thành">
+                <!-- Dynamically populated -->
+              </ul>
+              <div class="dropzone-empty-hint" id="empty-hint-pending">
+                <p>Kéo thẻ vào đây hoặc thêm mới</p>
+              </div>
+            </div>
           </div>
-          <h3>Chưa có công việc nào</h3>
-          <p>Hãy nhập tên công việc ở trên. Bất kỳ client nào thêm task thì mọi client khác đều sẽ thấy.</p>
-        </div>
 
-        <ul class="task-list" id="task-list" aria-label="Danh sách công việc">
-          <!-- Dynamically populated -->
-        </ul>
+          <!-- COLUMN 2: ĐÃ HOÀN THÀNH -->
+          <div class="kanban-column column-completed glass-card" id="column-completed" data-status="completed">
+            <div class="column-header">
+              <div class="column-title-group">
+                <span class="column-indicator indicator-completed"></span>
+                <h2 class="column-title">Đã hoàn thành</h2>
+              </div>
+              <span class="column-badge badge-completed" id="badge-completed-count">0</span>
+            </div>
+
+            <div class="kanban-dropzone" id="dropzone-completed" data-target-status="true">
+              <ul class="kanban-card-list" id="list-completed" aria-label="Danh sách đã hoàn thành">
+                <!-- Dynamically populated -->
+              </ul>
+              <div class="dropzone-empty-hint" id="empty-hint-completed">
+                <p>Kéo thẻ vào đây khi hoàn thành</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
-      <!-- Architecture Card (V2 Explanation) -->
+      <!-- Architecture Card (V3 Explanation) -->
       <section class="info-card glass-card">
         <div class="info-header">
           <div class="info-badge">
@@ -242,26 +264,26 @@
               <line x1="12" y1="16" x2="12" y2="12"/>
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            Thông tin kiến trúc Version 2: Client–Server & Multi-Device
+            Thông tin kiến trúc Version 3: N-Layer & Thay đổi Nguồn lưu trữ / UI
           </div>
-          <span class="info-sub">Đề bài: Hai người mở ứng dụng trên hai thiết bị hoặc hai trình duyệt riêng</span>
+          <span class="info-sub">Đề bài: Đổi UI sang Kanban 2 cột, đổi lưu trữ sang SQLite, không mất task cũ</span>
         </div>
         <div class="info-grid">
           <div class="info-item">
-            <span class="info-key">Kiến trúc</span>
-            <span class="info-val">Client–Server tập trung (1 C Server lắng nghe <code>0.0.0.0:8080</code>, phục vụ N client)</span>
+            <span class="info-key">Kiến trúc N-Layer</span>
+            <span class="info-val">Presentation (<code>server.c</code> + Web) &harr; Business Service (<code>task_service.c</code>) &harr; Data Repository (<code>sqlite_repository.c</code>)</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Truyền thông & Tunnel</span>
-            <span class="info-val">HTTP REST API + Ngrok Tunnel (Cho phép máy ngoài Internet hoặc điện thoại truy cập)</span>
+            <span class="info-key">Nguồn lưu trữ mới</span>
+            <span class="info-val">Cơ sở dữ liệu SQLite (<code>tasks.db</code>) với chuẩn giao dịch ACID và WAL mode</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Cơ chế đồng bộ</span>
-            <span class="info-val">Auto-polling định kỳ 2.5s (Không xung đột, tự động cập nhật khi client khác thao tác)</span>
+            <span class="info-key">Data Migration</span>
+            <span class="info-val">Tự động chuyển đổi toàn bộ task cũ từ <code>tasks.json</code> sang <code>tasks.db</code> không mất dữ liệu</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Kiểm chứng NFR</span>
-            <span class="info-val">Client A thêm task &rarr; Client B thấy; Client B hoàn thành &rarr; Client A thấy</span>
+            <span class="info-key">Giao diện mới</span>
+            <span class="info-val">Bảng Kanban 2 cột (Chưa xong &harr; Đã xong) hỗ trợ kéo thả trực quan</span>
           </div>
         </div>
       </section>

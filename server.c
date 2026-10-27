@@ -14,16 +14,15 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "cJSON.h"
+#include "task_service.h"
 
 #define DEFAULT_PORT 8080
 #define BUFFER_SIZE 65536
-#define TASKS_FILE "tasks.json"
+#define TASKS_DB "tasks.db"
+#define TASKS_JSON_MIGRATION "tasks.json"
 
 static volatile sig_atomic_t server_running = 1;
 static int server_socket_fd = -1;
-
-static cJSON *tasks_root = NULL;
-static pthread_mutex_t tasks_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void handle_sigint(int sig) {
     (void)sig;
@@ -60,79 +59,6 @@ static char *read_file_to_string(const char *path, long *out_len) {
 
     if (out_len) *out_len = (long)read_bytes;
     return buffer;
-}
-
-/* Persistence: Save tasks to tasks.json atomically */
-static bool save_tasks_to_disk(void) {
-    if (!tasks_root) return false;
-
-    char *rendered = cJSON_Print(tasks_root);
-    if (!rendered) return false;
-
-    char tmp_file[64];
-    snprintf(tmp_file, sizeof(tmp_file), "%s.tmp", TASKS_FILE);
-
-    FILE *f = fopen(tmp_file, "wb");
-    if (!f) {
-        free(rendered);
-        return false;
-    }
-
-    size_t len = strlen(rendered);
-    if (fwrite(rendered, 1, len, f) != len) {
-        fclose(f);
-        unlink(tmp_file);
-        free(rendered);
-        return false;
-    }
-    fflush(f);
-    fclose(f);
-
-    if (rename(tmp_file, TASKS_FILE) != 0) {
-        unlink(tmp_file);
-        free(rendered);
-        return false;
-    }
-
-    free(rendered);
-    return true;
-}
-
-/* Persistence: Load tasks from tasks.json or init if missing */
-static void init_tasks_storage(void) {
-    pthread_mutex_lock(&tasks_mutex);
-    long len = 0;
-    char *content = read_file_to_string(TASKS_FILE, &len);
-
-    if (content && len > 0) {
-        tasks_root = cJSON_Parse(content);
-        free(content);
-        if (!tasks_root || !cJSON_IsArray(tasks_root)) {
-            if (tasks_root) cJSON_Delete(tasks_root);
-            tasks_root = cJSON_CreateArray();
-            save_tasks_to_disk();
-        }
-    } else {
-        if (content) free(content);
-        tasks_root = cJSON_CreateArray();
-        save_tasks_to_disk();
-    }
-    pthread_mutex_unlock(&tasks_mutex);
-}
-
-/* Find max ID among current tasks */
-static int get_next_task_id(void) {
-    int max_id = 0;
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, tasks_root) {
-        cJSON *id_obj = cJSON_GetObjectItemCaseSensitive(item, "id");
-        if (id_obj && cJSON_IsNumber(id_obj)) {
-            if (id_obj->valueint > max_id) {
-                max_id = id_obj->valueint;
-            }
-        }
-    }
-    return max_id + 1;
 }
 
 /* Send HTTP Response */
@@ -182,14 +108,19 @@ static void serve_static_file(int client_fd, const char *filepath, const char *c
     free(data);
 }
 
-/* Route handlers */
+/* Route handlers delegating to Service Layer */
 static void handle_get_tasks(int client_fd) {
-    pthread_mutex_lock(&tasks_mutex);
-    char *json_str = cJSON_Print(tasks_root);
-    pthread_mutex_unlock(&tasks_mutex);
+    cJSON *tasks = task_service_get_all();
+    if (!tasks) {
+        send_error(client_fd, 500, "Internal Server Error", "Không thể lấy danh sách công việc");
+        return;
+    }
+
+    char *json_str = cJSON_Print(tasks);
+    cJSON_Delete(tasks);
 
     if (!json_str) {
-        send_error(client_fd, 500, "Internal Server Error", "Failed to render tasks JSON");
+        send_error(client_fd, 500, "Internal Server Error", "Lỗi format JSON");
         return;
     }
 
@@ -210,28 +141,19 @@ static void handle_post_task(int client_fd, const char *body) {
     }
 
     cJSON *title_obj = cJSON_GetObjectItemCaseSensitive(payload, "title");
-    if (!title_obj || !cJSON_IsString(title_obj) || strlen(title_obj->valuestring) == 0) {
-        cJSON_Delete(payload);
-        send_error(client_fd, 400, "Bad Request", "Task 'title' is required and must not be empty");
+    const char *title = (title_obj && cJSON_IsString(title_obj)) ? title_obj->valuestring : NULL;
+
+    char err_buf[256] = {0};
+    cJSON *new_task = task_service_create(title, err_buf, sizeof(err_buf));
+    cJSON_Delete(payload);
+
+    if (!new_task) {
+        send_error(client_fd, 400, "Bad Request", strlen(err_buf) > 0 ? err_buf : "Lỗi tạo công việc");
         return;
     }
 
-    pthread_mutex_lock(&tasks_mutex);
-    int next_id = get_next_task_id();
-
-    cJSON *task = cJSON_CreateObject();
-    cJSON_AddNumberToObject(task, "id", next_id);
-    cJSON_AddStringToObject(task, "title", title_obj->valuestring);
-    cJSON_AddBoolToObject(task, "completed", false);
-    cJSON_AddNumberToObject(task, "created_at", (double)time(NULL));
-
-    cJSON_AddItemToArray(tasks_root, task);
-    save_tasks_to_disk();
-
-    char *task_str = cJSON_Print(task);
-    pthread_mutex_unlock(&tasks_mutex);
-
-    cJSON_Delete(payload);
+    char *task_str = cJSON_Print(new_task);
+    cJSON_Delete(new_task);
 
     send_json_response(client_fd, 201, "Created", task_str);
     free(task_str);
@@ -249,67 +171,45 @@ static void handle_update_task(int client_fd, int target_id, const char *body) {
         return;
     }
 
-    pthread_mutex_lock(&tasks_mutex);
-    cJSON *target_task = NULL;
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, tasks_root) {
-        cJSON *id_obj = cJSON_GetObjectItemCaseSensitive(item, "id");
-        if (id_obj && cJSON_IsNumber(id_obj) && id_obj->valueint == target_id) {
-            target_task = item;
-            break;
-        }
+    bool has_completed = false;
+    bool completed_val = false;
+    cJSON *completed_obj = cJSON_GetObjectItemCaseSensitive(payload, "completed");
+    if (completed_obj && cJSON_IsBool(completed_obj)) {
+        has_completed = true;
+        completed_val = cJSON_IsTrue(completed_obj);
     }
 
-    if (!target_task) {
-        pthread_mutex_unlock(&tasks_mutex);
-        cJSON_Delete(payload);
-        send_error(client_fd, 404, "Not Found", "Task not found");
+    const char *new_title = NULL;
+    cJSON *title_obj = cJSON_GetObjectItemCaseSensitive(payload, "title");
+    if (title_obj && cJSON_IsString(title_obj)) {
+        new_title = title_obj->valuestring;
+    }
+
+    char err_buf[256] = {0};
+    cJSON *updated_task = task_service_update(target_id, 
+                                             has_completed ? &completed_val : NULL, 
+                                             new_title, 
+                                             err_buf, sizeof(err_buf));
+    cJSON_Delete(payload);
+
+    if (!updated_task) {
+        send_error(client_fd, 404, "Not Found", strlen(err_buf) > 0 ? err_buf : "Công việc không tồn tại");
         return;
     }
 
-    cJSON *completed_obj = cJSON_GetObjectItemCaseSensitive(payload, "completed");
-    if (completed_obj && cJSON_IsBool(completed_obj)) {
-        cJSON_ReplaceItemInObject(target_task, "completed", cJSON_CreateBool(cJSON_IsTrue(completed_obj)));
-    }
-
-    cJSON *title_obj = cJSON_GetObjectItemCaseSensitive(payload, "title");
-    if (title_obj && cJSON_IsString(title_obj) && strlen(title_obj->valuestring) > 0) {
-        cJSON_ReplaceItemInObject(target_task, "title", cJSON_CreateString(title_obj->valuestring));
-    }
-
-    save_tasks_to_disk();
-    char *updated_str = cJSON_Print(target_task);
-    pthread_mutex_unlock(&tasks_mutex);
-
-    cJSON_Delete(payload);
+    char *updated_str = cJSON_Print(updated_task);
+    cJSON_Delete(updated_task);
 
     send_json_response(client_fd, 200, "OK", updated_str);
     free(updated_str);
 }
 
 static void handle_delete_task(int client_fd, int target_id) {
-    pthread_mutex_lock(&tasks_mutex);
-    int target_idx = -1;
-    int idx = 0;
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, tasks_root) {
-        cJSON *id_obj = cJSON_GetObjectItemCaseSensitive(item, "id");
-        if (id_obj && cJSON_IsNumber(id_obj) && id_obj->valueint == target_id) {
-            target_idx = idx;
-            break;
-        }
-        idx++;
-    }
-
-    if (target_idx < 0) {
-        pthread_mutex_unlock(&tasks_mutex);
-        send_error(client_fd, 404, "Not Found", "Task not found");
+    char err_buf[256] = {0};
+    if (!task_service_delete(target_id, err_buf, sizeof(err_buf))) {
+        send_error(client_fd, 404, "Not Found", strlen(err_buf) > 0 ? err_buf : "Công việc không tồn tại");
         return;
     }
-
-    cJSON_DeleteItemFromArray(tasks_root, target_idx);
-    save_tasks_to_disk();
-    pthread_mutex_unlock(&tasks_mutex);
 
     char resp[256];
     snprintf(resp, sizeof(resp), "{\"success\":true,\"deleted_id\":%d}", target_id);
@@ -338,17 +238,14 @@ static void *handle_client(void *arg) {
         return NULL;
     }
 
-    /* Strip query string from path for routing */
     char *query = strchr(path, '?');
     if (query) *query = '\0';
 
-    /* Locate body */
     char *body = strstr(buffer, "\r\n\r\n");
     if (body) {
         body += 4;
     }
 
-    /* If Content-Length > body read so far, read remainder */
     char *cl_header = strcasestr(buffer, "Content-Length:");
     if (cl_header) {
         long content_length = strtol(cl_header + 15, NULL, 10);
@@ -363,7 +260,6 @@ static void *handle_client(void *arg) {
         }
     }
 
-    /* Handle OPTIONS for CORS */
     if (strcmp(method, "OPTIONS") == 0) {
         send_response(client_fd, 204, "No Content", "text/plain", "", 0);
         close(client_fd);
@@ -371,6 +267,17 @@ static void *handle_client(void *arg) {
     }
 
     /* API routes */
+    if (strcmp(path, "/api/info") == 0) {
+        int count = task_service_count();
+        char info_json[512];
+        snprintf(info_json, sizeof(info_json),
+            "{\"version\":\"V3\",\"architecture\":\"N-Layer (Presentation, Service, SQLite Repository)\",\"storage\":\"tasks.db (SQLite3)\",\"ui\":\"Kanban 2-Column Board\",\"task_count\":%d,\"timestamp\":%ld}",
+            count, (long)time(NULL));
+        send_json_response(client_fd, 200, "OK", info_json);
+        close(client_fd);
+        return NULL;
+    }
+
     if (strncmp(path, "/api/tasks", 10) == 0) {
         char *id_part = path + 10;
         if (*id_part == '/') id_part++;
@@ -391,45 +298,10 @@ static void *handle_client(void *arg) {
                 handle_update_task(client_fd, task_id, body);
             } else if (strcmp(method, "DELETE") == 0) {
                 handle_delete_task(client_fd, task_id);
-            } else if (strcmp(method, "GET") == 0) {
-                /* Optional get single task */
-                pthread_mutex_lock(&tasks_mutex);
-                cJSON *target = NULL;
-                cJSON *it = NULL;
-                cJSON_ArrayForEach(it, tasks_root) {
-                    cJSON *id_obj = cJSON_GetObjectItemCaseSensitive(it, "id");
-                    if (id_obj && id_obj->valueint == task_id) {
-                        target = it;
-                        break;
-                    }
-                }
-                char *res = target ? cJSON_Print(target) : NULL;
-                pthread_mutex_unlock(&tasks_mutex);
-                if (target && res) {
-                    send_json_response(client_fd, 200, "OK", res);
-                    free(res);
-                } else {
-                    send_error(client_fd, 404, "Not Found", "Task not found");
-                }
             } else {
                 send_error(client_fd, 405, "Method Not Allowed", "Method not supported on /api/tasks/:id");
             }
         }
-        close(client_fd);
-        return NULL;
-    }
-
-    /* API info route */
-    if (strcmp(path, "/api/info") == 0) {
-        pthread_mutex_lock(&tasks_mutex);
-        int count = tasks_root ? cJSON_GetArraySize(tasks_root) : 0;
-        pthread_mutex_unlock(&tasks_mutex);
-
-        char info_json[256];
-        snprintf(info_json, sizeof(info_json),
-            "{\"version\":\"V2\",\"architecture\":\"Client-Server (Multi-Client)\",\"storage\":\"tasks.json\",\"task_count\":%d,\"timestamp\":%ld}",
-            count, (long)time(NULL));
-        send_json_response(client_fd, 200, "OK", info_json);
         close(client_fd);
         return NULL;
     }
@@ -442,7 +314,7 @@ static void *handle_client(void *arg) {
     } else if (strcmp(path, "/app.js") == 0 || strcmp(path, "/public/app.js") == 0) {
         serve_static_file(client_fd, "public/app.js", "application/javascript; charset=utf-8");
     } else if (strcmp(path, "/tasks.json") == 0) {
-        serve_static_file(client_fd, TASKS_FILE, "application/json; charset=utf-8");
+        serve_static_file(client_fd, TASKS_JSON_MIGRATION, "application/json; charset=utf-8");
     } else {
         send_error(client_fd, 404, "Not Found", "Route not found");
     }
@@ -462,11 +334,16 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, handle_sigint);
     signal(SIGPIPE, SIG_IGN);
 
-    init_tasks_storage();
+    // Initialize Service Layer & SQLite Repository (with migration from tasks.json)
+    if (!task_service_init(TASKS_DB, TASKS_JSON_MIGRATION)) {
+        fprintf(stderr, "Failed to initialize Task Service and SQLite Repository.\n");
+        return 1;
+    }
 
     server_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket_fd < 0) {
         perror("Failed to create socket");
+        task_service_close();
         return 1;
     }
 
@@ -484,20 +361,23 @@ int main(int argc, char *argv[]) {
     if (bind(server_socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Socket bind failed");
         close(server_socket_fd);
+        task_service_close();
         return 1;
     }
 
     if (listen(server_socket_fd, 64) < 0) {
         perror("Socket listen failed");
         close(server_socket_fd);
+        task_service_close();
         return 1;
     }
 
     printf("===================================================\n");
-    printf(" CNPM-W7 Task Manager (Version 2 - Client-Server)\n");
+    printf(" CNPM-W7 Task Manager (Version 3 - N-Layer & SQLite)\n");
     printf(" Server listening at: http://0.0.0.0:%d\n", port);
-    printf(" Multi-client:        Enabled (Concurrent + Polling)\n");
-    printf(" Data persistence:    %s\n", TASKS_FILE);
+    printf(" Architecture:        N-Layer (Presentation / Service / Repo)\n");
+    printf(" Storage Engine:      SQLite3 (%s)\n", TASKS_DB);
+    printf(" UI Style:            2-Column Kanban (Pending / Completed)\n");
     printf(" Press Ctrl+C to terminate cleanly.\n");
     printf("===================================================\n");
     fflush(stdout);
@@ -525,14 +405,7 @@ int main(int argc, char *argv[]) {
         close(server_socket_fd);
     }
 
-    pthread_mutex_lock(&tasks_mutex);
-    if (tasks_root) {
-        save_tasks_to_disk();
-        cJSON_Delete(tasks_root);
-        tasks_root = NULL;
-    }
-    pthread_mutex_unlock(&tasks_mutex);
-
-    printf("Server stopped.\n");
+    task_service_close();
+    printf("Server stopped cleanly.\n");
     return 0;
 }
