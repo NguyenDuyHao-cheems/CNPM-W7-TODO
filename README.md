@@ -1,127 +1,100 @@
 # CNPM Tuần 7: Tiến hóa kiến trúc ứng dụng quản lý công việc
 
-Dự án cài đặt ứng dụng quản lý công việc (Task Management) tiến hóa qua 4 phiên bản kiến trúc theo yêu cầu môn **Công nghệ phần mềm** (Software Architecture Evolution).
+Dự án cài đặt ứng dụng quản lý công việc (Task Management) tiến hóa qua các phiên bản kiến trúc theo yêu cầu môn **Công nghệ phần mềm** (Software Architecture Evolution).
 
 ---
 
-## 📌 Phiên bản 1 (Version 1): Chạy cục bộ trên một máy (Local C Backend + JSON File)
+## 📌 Tổng quan các phiên bản
 
-### 1. Yêu cầu & Ràng buộc
-- **Chức năng cố định (CRUD 4 tính năng):**
-  1. Tạo task có tên (`POST /api/tasks`)
-  2. Xem danh sách công việc (`GET /api/tasks`)
-  3. Cập nhật trạng thái Chưa hoàn thành / Hoàn thành (`PUT /api/tasks/:id`)
-  4. Xóa task (`DELETE /api/tasks/:id`)
-- **Thuộc tính chất lượng (NFR):** 
-  - **Data Persistence:** Dữ liệu được lưu trữ bền vững vào tệp `tasks.json`. Sau khi tắt hoặc khởi động lại ứng dụng, toàn bộ danh sách task và trạng thái vẫn được phục hồi đầy đủ.
-- **Ràng buộc mới:** Chạy trên một máy cục bộ, backend tối giản bằng ngôn ngữ **C**, kết hợp giao diện Web đơn giản, hiện đại.
-- **Điểm hạn chế của kiến trúc V1:** 
-  - Kiến trúc nguyên khối cục bộ (Monolithic local). Toàn bộ dữ liệu nằm trong tệp `tasks.json` cục bộ, chưa hỗ trợ đồng bộ đa thiết bị hoặc nhiều người dùng qua mạng (chưa đạt Client–Server phân tán của V2).
-  - Tầng giao diện, xử lý nghiệp vụ và truy xuất file JSON còn tập trung trong một process máy chủ duy nhất (chưa tách N-Layer / MVC như yêu cầu V3).
-  - Đọc/ghi toàn bộ tệp JSON khi có thay đổi, chưa tối ưu hiệu năng và thiếu giao dịch (ACID).
+| Phiên bản | Mô hình kiến trúc | Phạm vi triển khai & Lưu trữ | Trạng thái |
+| :--- | :--- | :--- | :--- |
+| **V1** | Standalone Local Process | Chạy cục bộ 1 máy, file `tasks.json` | ✅ Hoàn thành (`tag: v1.0`) |
+| **V2** | Client–Server (Centralized State) | Nhiều client kết nối chung 1 C server qua LAN / Ngrok Tunnel | ✅ Hoàn thành (`tag: v2.0`) |
+| **V3** | N-Layer & MVC / MVVM | Tách tầng Presentation/Service/Repository, đổi sang SQLite | ⏳ Tiếp theo |
+| **V4** | Peer-to-Peer (P2P Direct Sync) | Đồng bộ ngang hàng khi mất server trung tâm | ⏳ Tiếp theo |
 
 ---
 
-## 🛠️ Công nghệ sử dụng trong Version 1
-- **Ngôn ngữ Backend:** C (ANSI C / POSIX C99)
-- **Networking:** POSIX Sockets (`sys/socket.h`, `netinet/in.h`), đa luồng `pthread` xử lý kết nối đồng thời.
-- **Thư viện JSON:** `cJSON` (Dave Gamble - MIT License), được vendor trực tiếp không cần cài phụ thuộc bên ngoài.
-- **Lưu trữ:** File `tasks.json` (sử dụng cơ chế ghi tạm `tasks.json.tmp` rồi atomic `rename` đảm bảo an toàn dữ liệu).
-- **Frontend:** HTML5 ngữ nghĩa, Vanilla CSS hiện đại (Dark Glassmorphism, Responsive), Vanilla JavaScript (Async/Await Fetch API).
+## 🚀 Hướng dẫn nhanh khởi chạy Version 2
 
----
-
-## 📁 Cấu trúc thư mục
-
-```text
-CNPM-W7-TODO/
-├── Makefile                                    # Lệnh build & run backend C
-├── server.c                                    # Mã nguồn C HTTP Server & REST API
-├── cJSON.c                                     # Parser & Serializer JSON bằng C
-├── cJSON.h                                     # Header cJSON
-├── tasks.json                                  # Nơi lưu trữ dữ liệu bền vững
-├── test_v1.sh                                  # Script kiểm thử tự động kịch bản V1
-├── public/                                     # Thư mục giao diện Web
-│   ├── index.html                              # Trang chủ giao diện quản lý task
-│   ├── style.css                               # Giao diện hiện đại, glassmorphism
-│   └── app.js                                  # Logic gọi API và cập nhật DOM
-├── Bài tập tuần 7_ Tiến hóa... .html          # Đề bài gốc tuần 7
-└── README.md                                   # Tài liệu hướng dẫn & giải thích kiến trúc
-```
-
----
-
-## 🚀 Hướng dẫn biên dịch & khởi chạy
-
-### Yêu cầu môi trường
-- Hệ điều hành Linux / macOS (hoặc WSL trên Windows)
-- Trình biên dịch C: `gcc` hoặc `clang`
-- Tiện ích: `make`, `curl`
-
-### 1. Biên dịch mã nguồn
+### 1. Khởi chạy C Backend & Ngrok Tunnel (Cho phép máy khác truy cập)
+Chạy script tích hợp sẵn:
 ```bash
-make clean
-make
+./start_ngrok.sh
 ```
+Script sẽ tự động:
+1. Biên dịch C Backend (nếu chưa build).
+2. Chạy server lắng nghe trên tất cả các card mạng `0.0.0.0:8080`.
+3. Bật tunnel `ngrok` công khai ra Internet và in đường dẫn URL ra màn hình, ví dụ:
+   - **Local URL:** `http://localhost:8080`
+   - **Ngrok Public URL:** `https://kiera-keratometric-varietally.ngrok-free.dev`
 
-### 2. Khởi chạy Server
-Mặc định server sẽ lắng nghe trên cổng `8080`:
+### 2. Kiểm chứng tự động (Automated Rubric Test)
+Chạy script kiểm tra kịch bản 2 client thao tác chéo:
 ```bash
-./server 8080
-# hoặc:
-make run
+./test_v2.sh
 ```
-
-Sau khi chạy, mở trình duyệt web truy cập:
-👉 **http://localhost:8080**
 
 ---
 
-## 🧪 Kịch bản kiểm chứng Version 1 (Rubric Verification)
+## 🏛️ Chi tiết kiến trúc Version 2: Client–Server & Multi-Device Collaboration
+
+### 1. Yêu cầu & Ràng buộc theo đề bài
+- **Yêu cầu khách hàng:** Hai người mở ứng dụng trên hai thiết bị hoặc hai trình duyệt riêng. Mỗi người phải thấy các công việc được cập nhật từ người kia.
+- **Thuộc tính chất lượng (NFR):**
+  - **Shared Centralized State:** Trạng thái chia sẻ tập trung giữa nhiều client thông qua backend trung tâm.
+  - **Concurrency & Freshness:** Hỗ trợ đồng thời nhiều client đọc/ghi; dữ liệu phản ánh cập nhật mà không cần tải lại thủ công.
+- **Ràng buộc mới của V2:**
+  - Backend C mở lắng nghe `0.0.0.0:8080` (thay vì chỉ `127.0.0.1`).
+  - Hỗ trợ đường truyền mạng công khai qua **Ngrok Tunnel** để thiết bị khác ngoài Internet (như điện thoại, laptop khác) truy cập trực tiếp.
+  - Client bổ sung cơ chế **Auto-Polling định kỳ (2.5 giây)**: Tự động so sánh dữ liệu mới từ server để cập nhật DOM mượt mà, thông báo khi có thay đổi từ thiết bị khác.
+- **Điểm hạn chế của thiết kế V2:**
+  - **Single Point of Failure (SPOF):** Toàn bộ hệ thống phụ thuộc hoàn toàn vào máy chủ trung tâm. Nếu C server hoặc đường truyền Ngrok ngắt kết nối, tất cả client không thể đọc, ghi hay cập nhật bất kỳ task nào.
+  - **Overhead của Polling:** Polling định kỳ tạo các request lặp lại ngay cả khi không có dữ liệu thay đổi.
+  - **Chưa tách lớp (Coupling):** Code backend C vẫn trộn lẫn giữa nhận request HTTP, kiểm tra nghiệp vụ và đọc/ghi file `tasks.json` (sẽ được tái cấu trúc N-Layer ở V3).
+
+---
+
+## 🧪 Kịch bản kiểm chứng Version 2 (Rubric Check)
 
 Theo đúng yêu cầu của mục **04. Bảng kiểm chứng**:
-> **Thao tác:** Tạo 2 task, hoàn thành 1 task, khởi động lại server.  
-> **Đạt khi:** Hai task và trạng thái được khôi phục chính xác sau khi khởi động lại.
+> **Thao tác:** A tạo task, B xem; B cập nhật, A xem.  
+> **Đạt khi:** Hai client quan sát cùng dữ liệu server.
 
-### Cách 1: Chạy kịch bản kiểm thử tự động
-Chúng tôi đã cung cấp script tự động hóa toàn bộ quy trình:
-```bash
-chmod +x test_v1.sh
-./test_v1.sh
-```
-
-Kết quả kiểm thử:
+### 1. Kiểm thử tự động (`./test_v2.sh`)
 ```text
 ===========================================================
-  CNPM Week 7 - Verification Script for Version 1 (C Backend)
+  CNPM Week 7 - Verification Script for Version 2 (Client-Server)
 ===========================================================
-[1/7] Building C server...
-[2/7] Starting C server on port 8089...
-[3/7] Verifying server connectivity...
-[4/7] Creating 2 tasks...
-  -> Task 1: "Học lý thuyết Công nghệ phần mềm - Tuần 7" (completed: false)
-  -> Task 2: "Cài đặt Version 1 với C backend và tasks.json" (completed: false)
-[5/7] Marking Task 1 as completed...
-  -> Task 1 updated: (completed: true)
-[6/7] Stopping server to test persistence across restarts...
-  -> Restarting C server on port 8089...
-[7/7] Verifying tasks persistence after restart...
-  [PASS] Task 1 is present and completed=true.
-  [PASS] Task 2 is present and completed=false.
-  [PASS] tasks.json successfully preserved state across server shutdown and restart!
+[1/8] Rebuilding C server...
+[2/8] Starting C server on port 8088...
+[3/8] Checking V2 server connectivity and /api/info...
+  -> Server Info: {"version":"V2","architecture":"Client-Server (Multi-Client)","storage":"tasks.json","task_count":0}
+[4/8] [Client A (Máy tính)] Tạo task mới...
+  -> Client A tạo thành công: Task #1: "Họp thiết kế kiến trúc Client-Server"
+[5/8] [Client B (Điện thoại)] Đọc danh sách task từ server trung tâm...
+  -> Client B quan sát thấy: Task #1 của Client A (completed: false)
+  [PASS] Client B đã quan sát thấy task của Client A.
+[6/8] [Client B (Điện thoại)] Đánh dấu hoàn thành task ID #1...
+  -> Client B cập nhật thành công: (completed: true)
+[7/8] [Client A (Máy tính)] Tải lại / nhận dữ liệu polling từ server...
+  -> Client A quan sát thấy: Task #1 (completed: true)
+  [PASS] Client A đã thấy trạng thái mới (completed: true) do Client B thực hiện.
+[8/8] [Client B] Tạo thêm task phản hồi và Client A xác nhận đồng bộ...
+  [PASS] Đồng bộ hai chiều giữa Client A và Client B hoạt động hoàn hảo trên server trung tâm!
 ===========================================================
-  SUCCESS: Version 1 verification PASSED all rubric checks!
+  SUCCESS: Version 2 verification PASSED all rubric checks!
 ===========================================================
 ```
 
-### Cách 2: Thử nghiệm thủ công trên Giao diện Web
-1. Mở trình duyệt tại `http://localhost:8080`.
-2. Nhập `Task 1` vào ô nhập và bấm **"Thêm công việc"**.
-3. Nhập `Task 2` vào ô nhập và bấm **"Thêm công việc"**.
-4. Bấm vào ô checkbox của `Task 1` để chuyển sang trạng thái **Đã hoàn thành**.
-5. Mở terminal, nhấn `Ctrl + C` để tắt server.
-6. Chạy lại `./server 8080`.
-7. Tải lại trang web (F5) hoặc mở tab mới: Xác nhận cả 2 task và trạng thái hoàn thành của Task 1 vẫn hiển thị nguyên vẹn.
+### 2. Thử nghiệm thực tế với 2 thiết bị qua Ngrok
+1. Chạy `./start_ngrok.sh`, lấy URL công khai (ví dụ: `https://...ngrok-free.dev`).
+2. **Thiết bị 1 (Laptop):** Mở trình duyệt tại URL trên (giao diện hiển thị badge `Thiết bị A`).
+3. **Thiết bị 2 (Điện thoại hoặc Trình duyệt ẩn danh):** Mở cùng URL trên (giao diện hiển thị badge `Thiết bị B`).
+4. Trên Thiết bị 1: Nhập task mới và bấm **"Thêm công việc"**.
+5. Nhìn sang Thiết bị 2: Sau 2.5s, task mới xuất hiện kèm toast thông báo tự động.
+6. Trên Thiết bị 2: Bấm vào checkbox để hoàn thành task.
+7. Nhìn lại Thiết bị 1: Task tự động gạch ngang chuyển sang màu xanh hoàn thành.
 
 ---
 
@@ -130,39 +103,51 @@ Kết quả kiểm thử:
 | Version | NFR mới | Quyết định thiết kế | File/thành phần đổi | Kết quả test |
 | :--- | :--- | :--- | :--- | :--- |
 | **V1** | **Data Persistence** trên một máy cục bộ (Dữ liệu không mất khi restart). | Xây dựng Single-Process C Backend với POSIX Sockets phục vụ REST API + Static Files; đọc/ghi dữ liệu vào `tasks.json` an toàn bằng `cJSON` và atomic rename. | `server.c`, `cJSON.c`, `cJSON.h`, `Makefile`, `public/index.html`, `public/style.css`, `public/app.js`, `tasks.json`. | Đạt: Tạo 2 task, cập nhật 1 task, tắt và khởi động lại server dữ liệu được khôi phục 100%. |
+| **V2** | **Centralized Shared State** giữa nhiều client đồng thời qua mạng; tính tươi mới (Freshness). | Cấu hình C Server bind `0.0.0.0`, mở rộng CORS; chuyển tiếp port qua **Ngrok Tunnel** ra Internet; bổ sung cơ chế **Auto-Polling (2.5s)** trên Frontend để đồng bộ hai chiều giữa các client. | `server.c` (CORS, Cache-Control, `/api/info`), `public/index.html`, `public/style.css`, `public/app.js` (Smart Polling, Client ID, Share link), `start_ngrok.sh`, `test_v2.sh`. | Đạt: Client A tạo task, Client B thấy sau 2.5s; Client B hoàn thành task, Client A thấy ngay trạng thái mới. |
 
 ---
 
-## 📐 Sơ đồ kiến trúc Version 1
+## 📐 Sơ đồ kiến trúc Version 2 (Client–Server)
 
 ```mermaid
 graph TD
-    subgraph Client ["Client (Trình duyệt Web - Localhost)"]
-        UI["Giao diện HTML5 / CSS3"]
-        JS["Logic điều khiển app.js (Fetch API)"]
-        UI <--> JS
+    subgraph ClientA ["Client A (Laptop / Browser 1)"]
+        UIA["Giao diện Web Client A"]
+        JSA["Polling Engine (2.5s)"]
+        UIA <--> JSA
     end
 
-    subgraph Server ["C Backend Process (server.c)"]
-        SocketListener["POSIX TCP Socket (:8080)"]
-        Router["HTTP Request Router & Parser"]
-        TaskService["Task Controller & cJSON"]
-        
-        SocketListener --> Router
-        Router --> TaskService
+    subgraph ClientB ["Client B (Điện thoại / Browser 2)"]
+        UIB["Giao diện Web Client B"]
+        JSB["Polling Engine (2.5s)"]
+        UIB <--> JSB
     end
 
-    subgraph Storage ["Local Storage"]
-        FileJSON[("tasks.json")]
+    subgraph Tunnel ["Internet / Network Tunnel"]
+        Ngrok["Ngrok Ingress (https://*.ngrok-free.dev)"]
     end
 
-    JS <==>|"HTTP REST API (GET, POST, PUT, DELETE)"| SocketListener
-    TaskService <==>|"Đọc / Ghi file (Atomic rename)"| FileJSON
+    subgraph Server ["C Central Server (0.0.0.0:8080)"]
+        Listener["POSIX TCP Socket Listener"]
+        PthreadPool["Pthread per Request"]
+        Router["HTTP Router (/api/tasks, /api/info)"]
+        Mutex["pthread_mutex_t tasks_mutex"]
+
+        Listener --> PthreadPool --> Router --> Mutex
+    end
+
+    subgraph Storage ["Centralized Storage"]
+        TasksJSON[("tasks.json")]
+    end
+
+    JSA <==>|"HTTP REST API"| Listener
+    JSB <==>|"HTTPS Tunnel"| Ngrok <==>|"Forward :8080"| Listener
+    Mutex <==>|"Đọc / Ghi đồng bộ an toàn"| TasksJSON
 ```
 
 ---
 
-## 💡 Trả lời câu hỏi kiến trúc mục 03 (V1)
-> **Câu hỏi trước khi giao agent:** *Chức năng đã chạy. Thiết kế hiện tại đủ cho tình huống nào?*
-- **Trả lời:** Thiết kế hiện tại của Version 1 hoàn toàn đáp ứng tốt cho **tình huống người dùng cá nhân (Single-user, Single-device)** làm việc trên một máy tính cục bộ offline, cần lưu trữ trạng thái công việc bền vững qua các lần tắt mở ứng dụng.
-- **Giới hạn cần tiến hóa ở V2:** Khi có yêu cầu hai hoặc nhiều người cùng cộng tác trên các thiết bị/trình duyệt khác nhau, kiến trúc cục bộ này cần được mở rộng kết nối mạng tập trung (Client–Server) với backend mở cho các IP trong mạng và cơ chế đồng bộ trạng thái giữa các client.
+## 💡 Trả lời câu hỏi kiến trúc mục 03 (V2)
+> **Câu hỏi trước khi giao agent:** *Dữ liệu đang nằm ở đâu? Nếu tắt server, client còn thực hiện được chức năng nào?*
+- **Dữ liệu đang nằm ở đâu:** Toàn bộ dữ liệu nằm tập trung tại máy chủ trung tâm trong tệp `tasks.json`. Các client chỉ lưu cache tạm thời trong bộ nhớ của trình duyệt để hiển thị giao diện.
+- **Nếu tắt server:** Client **không thể thực hiện được bất kỳ chức năng nào** (không thể tạo task mới, không thể xem danh sách cập nhật, không thể đổi trạng thái hoàn thành và không thể xóa). Client sẽ nhận lỗi mất kết nối mạng và giao diện chuyển sang trạng thái offline. Đây chính là điểm hạn chế lớn nhất của mô hình Client–Server tập trung, tạo tiền đề để nâng cấp tính sẵn sàng ở **Version 4 (P2P collaboration)**.

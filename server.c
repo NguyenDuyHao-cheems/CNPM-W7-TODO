@@ -143,9 +143,12 @@ static void send_response(int client_fd, int status_code, const char *status_tex
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
+        "Cache-Control: no-cache, no-store, must-revalidate\r\n"
+        "Pragma: no-cache\r\n"
+        "Expires: 0\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS\r\n"
-        "Access-Control-Allow-Headers: Content-Type\r\n"
+        "Access-Control-Allow-Headers: Content-Type, ngrok-skip-browser-warning\r\n"
         "Connection: close\r\n"
         "\r\n",
         status_code, status_text, content_type, body_len);
@@ -416,6 +419,21 @@ static void *handle_client(void *arg) {
         return NULL;
     }
 
+    /* API info route */
+    if (strcmp(path, "/api/info") == 0) {
+        pthread_mutex_lock(&tasks_mutex);
+        int count = tasks_root ? cJSON_GetArraySize(tasks_root) : 0;
+        pthread_mutex_unlock(&tasks_mutex);
+
+        char info_json[256];
+        snprintf(info_json, sizeof(info_json),
+            "{\"version\":\"V2\",\"architecture\":\"Client-Server (Multi-Client)\",\"storage\":\"tasks.json\",\"task_count\":%d,\"timestamp\":%ld}",
+            count, (long)time(NULL));
+        send_json_response(client_fd, 200, "OK", info_json);
+        close(client_fd);
+        return NULL;
+    }
+
     /* Static files */
     if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
         serve_static_file(client_fd, "public/index.html", "text/html; charset=utf-8");
@@ -476,8 +494,9 @@ int main(int argc, char *argv[]) {
     }
 
     printf("===================================================\n");
-    printf(" CNPM-W7 Task Manager (Version 1 - Local C Backend)\n");
-    printf(" Server listening at: http://localhost:%d\n", port);
+    printf(" CNPM-W7 Task Manager (Version 2 - Client-Server)\n");
+    printf(" Server listening at: http://0.0.0.0:%d\n", port);
+    printf(" Multi-client:        Enabled (Concurrent + Polling)\n");
     printf(" Data persistence:    %s\n", TASKS_FILE);
     printf(" Press Ctrl+C to terminate cleanly.\n");
     printf("===================================================\n");

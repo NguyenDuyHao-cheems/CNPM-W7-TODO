@@ -1,13 +1,16 @@
 /**
- * TaskFlow - Version 1 (Local C Backend + JSON File Storage)
+ * TaskFlow - Version 2 (Client–Server Multi-Device Collaboration)
  * CNPM Tuần 7: Tiến hóa kiến trúc ứng dụng quản lý công việc
  */
 
 const API_BASE = '/api/tasks';
+const POLL_INTERVAL_MS = 2500; // Poll server every 2.5 seconds
 
 // Application State
 let tasks = [];
 let currentFilter = 'all';
+let isInitialLoad = true;
+let isPolling = false;
 
 // DOM Elements
 const taskForm = document.getElementById('task-form');
@@ -17,6 +20,14 @@ const loadingState = document.getElementById('loading-state');
 const emptyState = document.getElementById('empty-state');
 const refreshBtn = document.getElementById('refresh-btn');
 const toastContainer = document.getElementById('toast-container');
+
+// Multi-Client / Network Elements (V2)
+const clientNameEl = document.getElementById('client-name');
+const renameClientBtn = document.getElementById('rename-client-btn');
+const syncDot = document.getElementById('sync-dot');
+const syncText = document.getElementById('sync-text');
+const shareUrlText = document.getElementById('share-url-text');
+const copyShareUrlBtn = document.getElementById('copy-share-url-btn');
 
 // Stats Elements
 const statTotal = document.getElementById('stat-total');
@@ -35,6 +46,52 @@ const statusText = document.getElementById('status-text');
 
 // Filter tabs
 const filterTabs = document.querySelectorAll('.filter-tab');
+
+// --- Helper: Setup Client Identity (V2) ---
+function initClientIdentity() {
+  let clientName = sessionStorage.getItem('taskflow_client_name');
+  if (!clientName) {
+    const letters = ['A', 'B', 'C', 'D'];
+    const randomLetter = letters[Math.floor(Math.random() * letters.length)];
+    const randomNum = Math.floor(100 + Math.random() * 900);
+    clientName = `Thiết bị ${randomLetter} (#${randomNum})`;
+    sessionStorage.setItem('taskflow_client_name', clientName);
+  }
+  if (clientNameEl) {
+    clientNameEl.textContent = clientName;
+  }
+
+  // Setup Share URL
+  if (shareUrlText) {
+    const currentOrigin = window.location.origin;
+    shareUrlText.textContent = currentOrigin;
+  }
+}
+
+// Rename Client
+if (renameClientBtn) {
+  renameClientBtn.addEventListener('click', () => {
+    const current = sessionStorage.getItem('taskflow_client_name') || 'Thiết bị';
+    const newName = prompt('Nhập tên đại diện cho thiết bị / trình duyệt này:', current);
+    if (newName && newName.trim()) {
+      sessionStorage.setItem('taskflow_client_name', newName.trim());
+      clientNameEl.textContent = newName.trim();
+      showToast(`Đã đổi tên thiết bị thành: "${newName.trim()}"`, 'info');
+    }
+  });
+}
+
+// Copy Share URL
+if (copyShareUrlBtn) {
+  copyShareUrlBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.origin);
+      showToast('Đã sao chép link truy cập vào clipboard! Mở trên thiết bị khác để thử nghiệm.', 'success');
+    } catch {
+      showToast('Link: ' + window.location.origin, 'info');
+    }
+  });
+}
 
 // Toast notification helper
 function showToast(message, type = 'info') {
@@ -60,7 +117,7 @@ function showToast(message, type = 'info') {
 function setServerStatus(online, details = '') {
   if (online) {
     statusIndicator.className = 'pulse-indicator connected';
-    statusText.textContent = details || 'Hoạt động (C Backend)';
+    statusText.textContent = details || 'Hoạt động (C Server :8080)';
   } else {
     statusIndicator.className = 'pulse-indicator error';
     statusText.textContent = details || 'Mất kết nối server';
@@ -75,21 +132,67 @@ function formatTime(timestamp) {
          ' ' + date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
 }
 
+// Deep Comparison of task arrays to avoid unnecessary DOM re-renders
+function areTasksEqual(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || 
+        a[i].completed !== b[i].completed || 
+        a[i].title !== b[i].title) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Fetch all tasks from C Backend
-async function loadTasks() {
+async function loadTasks(silent = false) {
+  if (isPolling) return;
+  isPolling = true;
+
   try {
-    const res = await fetch(API_BASE);
+    const res = await fetch(API_BASE, {
+      headers: {
+        'ngrok-skip-browser-warning': 'true',
+        'Cache-Control': 'no-cache'
+      }
+    });
+
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     
-    tasks = await res.json();
-    setServerStatus(true, 'Kết nối: 127.0.0.1');
-    render();
+    const newTasks = await res.json();
+    setServerStatus(true, 'Kết nối: 0.0.0.0:8080');
+
+    // Detect remote changes from other clients
+    if (!areTasksEqual(tasks, newTasks)) {
+      const isRemoteChange = !isInitialLoad && tasks.length > 0;
+      tasks = newTasks;
+      render();
+
+      if (isRemoteChange && !silent) {
+        showToast('🔄 Đã tự động đồng bộ dữ liệu mới nhất từ server!', 'info');
+      }
+    }
+
+    if (syncDot) {
+      syncDot.style.opacity = '1';
+      setTimeout(() => { if (syncDot) syncDot.style.opacity = '0.7'; }, 300);
+    }
+    if (syncText) {
+      syncText.textContent = `Đồng bộ: ${new Date().toLocaleTimeString('vi-VN')}`;
+    }
+
+    isInitialLoad = false;
   } catch (err) {
     console.error('Lỗi nạp tasks:', err);
     setServerStatus(false, 'Không thể kết nối C server');
-    showToast('Lỗi khi tải dữ liệu từ C backend!', 'error');
+    if (!silent) {
+      showToast('Lỗi khi tải dữ liệu từ C backend!', 'error');
+    }
   } finally {
-    loadingState.style.display = 'none';
+    isPolling = false;
+    if (loadingState) loadingState.style.display = 'none';
   }
 }
 
@@ -105,7 +208,10 @@ async function handleAddTask(e) {
   try {
     const res = await fetch(API_BASE, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true'
+      },
       body: JSON.stringify({ title })
     });
 
@@ -118,7 +224,7 @@ async function handleAddTask(e) {
     tasks.unshift(newTask);
     taskInput.value = '';
     render();
-    showToast(`Đã thêm task: "${newTask.title}" vào tasks.json`, 'success');
+    showToast(`Đã thêm task: "${newTask.title}" lên server`, 'success');
   } catch (err) {
     console.error('Lỗi tạo task:', err);
     showToast(`Không thể thêm task: ${err.message}`, 'error');
@@ -135,20 +241,28 @@ async function toggleTask(id) {
 
   const newStatus = !task.completed;
 
+  // Optimistic update
+  task.completed = newStatus;
+  render();
+
   try {
     const res = await fetch(`${API_BASE}/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': 'true'
+      },
       body: JSON.stringify({ completed: newStatus })
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    task.completed = newStatus;
-    render();
     showToast(newStatus ? `Đã hoàn thành task #${id}!` : `Đã mở lại task #${id}!`, 'info');
   } catch (err) {
     console.error('Lỗi cập nhật task:', err);
+    // Revert
+    task.completed = !newStatus;
+    render();
     showToast('Không thể cập nhật trạng thái!', 'error');
   }
 }
@@ -160,14 +274,17 @@ async function deleteTask(id) {
 
   try {
     const res = await fetch(`${API_BASE}/${id}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: {
+        'ngrok-skip-browser-warning': 'true'
+      }
     });
 
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
     tasks = tasks.filter(t => t.id !== id);
     render();
-    showToast(`Đã xóa task: "${taskTitle}" khỏi tasks.json`, 'info');
+    showToast(`Đã xóa task: "${taskTitle}" khỏi server`, 'info');
   } catch (err) {
     console.error('Lỗi xóa task:', err);
     showToast('Không thể xóa task!', 'error');
@@ -288,7 +405,7 @@ function escapeHtml(text) {
 taskForm.addEventListener('submit', handleAddTask);
 refreshBtn.addEventListener('click', () => {
   showToast('Đang tải lại dữ liệu từ C server...', 'info');
-  loadTasks();
+  loadTasks(false);
 });
 
 filterTabs.forEach(tab => {
@@ -301,4 +418,12 @@ filterTabs.forEach(tab => {
 });
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', loadTasks);
+document.addEventListener('DOMContentLoaded', () => {
+  initClientIdentity();
+  loadTasks(true);
+
+  // Version 2: Periodic polling to auto-sync with server and other devices
+  setInterval(() => {
+    loadTasks(true);
+  }, POLL_INTERVAL_MS);
+});

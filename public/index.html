@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TaskFlow | Quản lý công việc - Version 1 (C Backend)</title>
-  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 1 chạy cục bộ với C Backend và lưu trữ JSON file.">
+  <title>TaskFlow | Quản lý công việc - Version 2 (Client–Server)</title>
+  <meta name="description" content="Ứng dụng quản lý công việc tuần 7 - Version 2 kiến trúc Client–Server đa thiết bị với C Backend và ngrok.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -26,9 +26,9 @@
         <div>
           <div class="eyebrow-tag">
             <span class="badge-dot"></span>
-            CNPM Tuần 7 • Tiến hóa kiến trúc
+            CNPM Tuần 7 • Kiến trúc Client–Server
           </div>
-          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V1 • Local C Backend</span></h1>
+          <h1 class="brand-title">TaskFlow <span class="version-chip" id="version-tag">V2 • Client–Server</span></h1>
         </div>
       </div>
 
@@ -52,6 +52,46 @@
       </div>
     </header>
 
+    <!-- Multi-Client & Network Collaboration Bar (V2 Feature) -->
+    <section class="network-bar glass-card">
+      <div class="network-left">
+        <div class="client-badge" id="client-badge" title="Mỗi tab/thiết bị có một mã định danh riêng để thử nghiệm đa client">
+          <span class="client-avatar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </span>
+          <span class="client-text" id="client-name">Thiết bị: Client A</span>
+          <button type="button" class="btn-icon-subtle" id="rename-client-btn" title="Đổi tên thiết bị">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="sync-status-badge">
+          <span class="sync-dot pulsing" id="sync-dot"></span>
+          <span id="sync-text">Tự động đồng bộ: 2.5s</span>
+        </div>
+      </div>
+
+      <div class="network-right">
+        <div class="share-box">
+          <span class="share-label">Link chia sẻ đa máy:</span>
+          <code id="share-url-text">Đang tải URL...</code>
+          <button type="button" class="btn btn-secondary btn-sm" id="copy-share-url-btn" title="Sao chép link để mở trên thiết bị khác hoặc tab ẩn danh">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            Sao chép link
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- Main Content Area -->
     <main class="main-content">
       <!-- Input Card -->
@@ -69,7 +109,7 @@
               type="text" 
               id="task-title-input" 
               class="task-input" 
-              placeholder="Nhập tên công việc cần làm... (Ví dụ: Đọc tài liệu kiến trúc tuần 7)" 
+              placeholder="Nhập tên công việc mới... (Các thiết bị khác sẽ thấy sau 2.5s)" 
               autocomplete="off"
               required
             >
@@ -151,15 +191,15 @@
         </div>
 
         <div class="action-buttons">
-          <button class="btn btn-secondary btn-sm" id="refresh-btn" title="Làm mới từ server">
+          <button class="btn btn-secondary btn-sm" id="refresh-btn" title="Làm mới ngay từ server">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="23 4 23 10 17 10"/>
               <polyline points="1 20 1 14 7 14"/>
               <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
             </svg>
-            Làm mới
+            Làm mới ngay
           </button>
-          <a class="btn btn-secondary btn-sm" href="/tasks.json" target="_blank" title="Xem trực tiếp tasks.json">
+          <a class="btn btn-secondary btn-sm" href="/tasks.json" target="_blank" title="Xem trực tiếp file tasks.json trên server">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
               <polyline points="15 3 21 3 21 9"/>
@@ -174,7 +214,7 @@
       <section class="task-list-section">
         <div id="loading-state" class="state-message">
           <div class="spinner"></div>
-          <p>Đang nạp dữ liệu từ backend C...</p>
+          <p>Đang kết nối C backend và đồng bộ dữ liệu...</p>
         </div>
 
         <div id="empty-state" class="state-message glass-card" style="display: none;">
@@ -185,7 +225,7 @@
             </svg>
           </div>
           <h3>Chưa có công việc nào</h3>
-          <p>Hãy nhập tên công việc ở trên và bấm "Thêm công việc" để lưu vào <code>tasks.json</code>.</p>
+          <p>Hãy nhập tên công việc ở trên. Bất kỳ client nào thêm task thì mọi client khác đều sẽ thấy.</p>
         </div>
 
         <ul class="task-list" id="task-list" aria-label="Danh sách công việc">
@@ -193,7 +233,7 @@
         </ul>
       </section>
 
-      <!-- Architecture Card (V1 Explanation) -->
+      <!-- Architecture Card (V2 Explanation) -->
       <section class="info-card glass-card">
         <div class="info-header">
           <div class="info-badge">
@@ -202,26 +242,26 @@
               <line x1="12" y1="16" x2="12" y2="12"/>
               <line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            Thông tin kiến trúc Version 1
+            Thông tin kiến trúc Version 2: Client–Server & Multi-Device
           </div>
-          <span class="info-sub">Đề bài: Ứng dụng ban đầu chạy cục bộ trên một máy</span>
+          <span class="info-sub">Đề bài: Hai người mở ứng dụng trên hai thiết bị hoặc hai trình duyệt riêng</span>
         </div>
         <div class="info-grid">
           <div class="info-item">
-            <span class="info-key">Frontend</span>
-            <span class="info-val">Single Page Application thuần (HTML5, Vanilla CSS, JS)</span>
+            <span class="info-key">Kiến trúc</span>
+            <span class="info-val">Client–Server tập trung (1 C Server lắng nghe <code>0.0.0.0:8080</code>, phục vụ N client)</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Backend</span>
-            <span class="info-val">C HTTP Server (POSIX Sockets, <code>pthread</code>, <code>cJSON</code>)</span>
+            <span class="info-key">Truyền thông & Tunnel</span>
+            <span class="info-val">HTTP REST API + Ngrok Tunnel (Cho phép máy ngoài Internet hoặc điện thoại truy cập)</span>
           </div>
           <div class="info-item">
-            <span class="info-key">Lưu trữ</span>
-            <span class="info-val">Tệp cục bộ <code>tasks.json</code> (Atomic rename on flush)</span>
+            <span class="info-key">Cơ chế đồng bộ</span>
+            <span class="info-val">Auto-polling định kỳ 2.5s (Không xung đột, tự động cập nhật khi client khác thao tác)</span>
           </div>
           <div class="info-item">
             <span class="info-key">Kiểm chứng NFR</span>
-            <span class="info-val">Tạo 2 task, hoàn thành 1 task, khởi động lại server &rarr; Dữ liệu bảo toàn</span>
+            <span class="info-val">Client A thêm task &rarr; Client B thấy; Client B hoàn thành &rarr; Client A thấy</span>
           </div>
         </div>
       </section>
